@@ -1,0 +1,145 @@
+import React from "react";
+import { Song } from "../data/mockSongs";
+import { useJuno } from "../App";
+import { fmtDuration } from "../lib/format";
+import { coverGradient } from "../lib/audio";
+import { Badge } from "./Badge";
+import { Button } from "./Button";
+import { SongOverflowMenu } from "./SongOverflowMenu";
+import { presetLabel } from "../data/modelPresets";
+
+const TYPE_LABEL: Record<Song["type"], string> = {
+  song: "Song",
+  upload: "Upload",
+  cover: "Cover",
+  remix: "Remix",
+  extended: "Extended",
+  mashup: "Mashup",
+  sample: "Sample",
+  reversed: "Reversed",
+  cropped: "Cropped",
+  replacement: "Replacement",
+};
+
+/** Song row (DESIGN_DOC §13) with default/hover/playing/selected/liked/
+ *  processing/failed/trashed states. */
+export function SongRow({
+  song,
+  queueIds,
+  showPlayCount,
+  selected,
+  onSelect,
+}: {
+  song: Song;
+  queueIds: string[];
+  showPlayCount?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  const { currentSong, isPlaying, playSong, togglePlay, patchSong } = useJuno();
+  const isCurrent = currentSong?.id === song.id;
+  const processing =
+    song.generationStatus === "queued" || song.generationStatus === "running";
+  const failed = song.generationStatus === "failed";
+
+  const rowClass = [
+    "song-row",
+    isCurrent && "playing",
+    selected && "selected",
+    song.trashed && "trashed",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <div className={rowClass} onClick={onSelect}>
+      <button
+        className="song-thumb"
+        style={{ background: coverGradient(song.id) }}
+        aria-label={isCurrent && isPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+        disabled={processing}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (isCurrent) togglePlay();
+          else playSong(song.id, queueIds);
+        }}
+      >
+        {processing ? (
+          <span className="spinner" aria-hidden="true" />
+        ) : isCurrent && isPlaying ? (
+          "⏸"
+        ) : (
+          "▶"
+        )}
+        <span className="duration-badge">{fmtDuration(song.durationSeconds)}</span>
+      </button>
+
+      <div className="song-body">
+        <div className="song-title-row">
+          <span className="song-title">{song.title}</span>
+          <Badge tone="accent">{presetLabel(song.model)}</Badge>
+          {song.type !== "song" && <Badge>{TYPE_LABEL[song.type]}</Badge>}
+          {song.metadata.instrumental && <Badge>Instrumental</Badge>}
+          {song.public && <Badge tone="success">Public</Badge>}
+          {processing && <Badge tone="warning">Processing</Badge>}
+          {failed && <Badge tone="danger">Failed</Badge>}
+          {song.trashed && <Badge tone="danger">Trashed</Badge>}
+        </div>
+        <div className="song-desc">
+          {failed && song.generationError
+            ? song.generationError
+            : song.description || "No description"}
+        </div>
+        <div className="song-actions" onClick={(e) => e.stopPropagation()}>
+          {showPlayCount && (
+            <span style={{ marginRight: 6 }} title="Play count">
+              ▶ {song.playCount}
+            </span>
+          )}
+          <Button
+            variant="icon"
+            label="Like"
+            active={song.liked}
+            onClick={() => patchSong(song.id, { liked: !song.liked, disliked: false })}
+          >
+            {song.liked ? "♥" : "♡"}
+          </Button>
+          <Button
+            variant="icon"
+            label="Dislike"
+            active={song.disliked}
+            onClick={() => patchSong(song.id, { disliked: !song.disliked, liked: false })}
+          >
+            👎
+          </Button>
+          {showPlayCount && (
+            <Button
+              variant="icon"
+              label="Comment"
+              onClick={() => patchSong(song.id, { commentCount: song.commentCount + 1 })}
+            >
+              💬{song.commentCount > 0 ? ` ${song.commentCount}` : ""}
+            </Button>
+          )}
+          <Button
+            variant="icon"
+            label="Share (toggle public)"
+            active={song.public}
+            onClick={() => patchSong(song.id, { public: !song.public })}
+          >
+            ↗
+          </Button>
+          {failed && (
+            <Button variant="ghost" label="Retry" onClick={() => patchSong(song.id, { generationStatus: "queued" })}>
+              Retry
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="song-row-right" onClick={(e) => e.stopPropagation()}>
+        <SongOverflowMenu song={song} />
+      </div>
+    </div>
+  );
+}

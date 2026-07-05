@@ -1,0 +1,33 @@
+:root {
+  --color-bg-app: #050608;
+  --color-bg-sidebar: #08090c;
+  --color-bg-panel: #111216;
+  --color-bg-card: #17181d;
+  --color-bg-card-hover: #202126;
+  --color-bg-pill: #23242a;
+  --color-bg-pill-active: #30313a;
+
+  --color-border-subtle: #24252b;
+  --color-border-strong: #363842;
+
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #b5b6bd;
+  --color-text-muted: #73757f;
+  --color-text-disabled: #555761;
+
+  --color-accent: #ff4db8;
+  --color-accent-hover: #ff70c7;
+  --color-accent-muted: #8a326b;
+
+  --color-warning: #f5a524;
+  --color-danger: #ef4444;
+  --color-success: #22c55e;
+
+  --radius-card: 22px;
+  --radius-pill: 999px;
+  --sidebar-width: 240px;
+  --bottom-player-height: 76px;
+
+  --shadow-popover: 0 18px 60px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
