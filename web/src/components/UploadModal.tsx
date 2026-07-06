@@ -9,9 +9,9 @@ import { newId } from "../lib/ids";
 const ACCEPT = ".mp3,.wav,.m4a,.ogg,.flac";
 
 /** Upload Audio modal (DESIGN_DOC §18): drag & drop or file picker.
- *  Files are POSTed to /api/upload (stored under host-mounted /uploads).
- *  If the proxy is unreachable, a local blob-URL asset keeps the flow
- *  working for the session. */
+ *  Files are POSTed to /api/upload with the active workspace so the row
+ *  lands in the right place. If the proxy is unreachable, a local blob-URL
+ *  asset keeps the flow working for the session. */
 export function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { addSong, addHistoryEvent, activeWorkspaceId } = useJuno();
   const [file, setFile] = useState<File | null>(null);
@@ -37,8 +37,8 @@ export function UploadModal({ open, onClose }: { open: boolean; onClose: () => v
     setBusy(true);
     setErr(null);
     try {
-      const res = await api.upload(file);
-      addSong({ ...res.asset, workspaceId: activeWorkspaceId });
+      const res = await api.upload(file, { workspaceId: activeWorkspaceId });
+      addSong(res.asset);
       addHistoryEvent(`Uploaded "${file.name}"`);
       setFile(null);
       onClose();

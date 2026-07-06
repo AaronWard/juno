@@ -8,7 +8,7 @@ import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import { aceClient } from "./aceClient";
 import { config } from "./config";
-import { addHistory, loadDb, mutateDb } from "./storage";
+import { addHistory, loadDb, mutateDb, purgeExpiredTrash } from "./storage";
 import { buildAcePayload, normalizeAceStatus, presetFor } from "./tasks";
 import { GenerateRequest, GenerationTask, Song } from "./types";
 import { upload } from "./uploads";
@@ -17,6 +17,11 @@ export const router = express.Router();
 
 const newId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const SONG_TYPES: Song["type"][] = [
+  "song", "upload", "cover", "remix", "extended",
+  "mashup", "sample", "reversed", "cropped", "replacement",
+];
 
 /* ------------------------------------------------------------------ */
 /* GET /api/health                                                     */
@@ -69,13 +74,12 @@ router.get("/models", async (_req: Request, res: Response) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* POST /api/models/init — switch among the three XL models            */
+/* POST /api/models/init — hot-swap the primary (slot 1) XL model      */
 /* ------------------------------------------------------------------ */
 router.post("/models/init", async (req: Request, res: Response) => {
   const preset = presetFor(req.body?.model);
   try {
     const result = await aceClient.init({
-      // slot 1: xl-sft, slot 2: xl-turbo, slot 3: xl-base
       slot: preset.slot,
       model: preset.aceModel,
       config_path: preset.ditPath,
@@ -275,7 +279,11 @@ router.get("/audio", async (req: Request, res: Response) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* POST /api/upload — save local audio into /uploads                   */
+/* POST /api/upload — save audio into /uploads.                        */
+/* Accepts optional multipart text fields so locally processed audio   */
+/* (Reverse, Crop, Speed, Sample, Mashup…) becomes a real library row: */
+/*   title, type, description, sourceSongId, workspaceId,              */
+/*   durationSeconds, styles (JSON array), lyrics                      */
 /* ------------------------------------------------------------------ */
 router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   const file = (req as any).file as Express.Multer.File | undefined;
@@ -283,17 +291,31 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
     res.status(400).json({ error: "No file uploaded" });
     return;
   }
+  const b = (req.body || {}) as Record<string, string>;
+  const type = SONG_TYPES.includes(b.type as Song["type"])
+    ? (b.type as Song["type"])
+    : "upload";
+  let styles: string[] = [];
+  try {
+    if (b.styles) styles = JSON.parse(b.styles);
+  } catch {
+    /* ignore malformed styles */
+  }
   const now = new Date().toISOString();
   const song: Song = {
-    id: newId("upl"),
-    title: path.basename(file.originalname, path.extname(file.originalname)),
-    description: "Uploaded audio",
-    styles: [],
+    id: newId(type === "upload" ? "upl" : "song"),
+    title:
+      b.title ||
+      path.basename(file.originalname, path.extname(file.originalname)),
+    description: b.description || "Uploaded audio",
+    lyrics: b.lyrics || undefined,
+    styles,
     model: "juno-xl-quality",
     aceModel: "acestep-v15-xl-sft",
-    type: "upload",
-    durationSeconds: 0,
+    type,
+    durationSeconds: Math.max(0, Math.round(Number(b.durationSeconds) || 0)),
     playlistIds: [],
+    workspaceId: b.workspaceId || undefined,
     liked: false,
     disliked: false,
     public: false,
@@ -301,6 +323,7 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
     commentCount: 0,
     createdAt: now,
     updatedAt: now,
+    sourceSongId: b.sourceSongId || undefined,
     localAudioPath: file.path,
     audioUrl: `/upload-audio/${path.basename(file.path)}`,
     generationStatus: "idle",
@@ -308,16 +331,25 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   };
   mutateDb((db) => {
     db.songs.unshift(song);
-    addHistory(db, `Uploaded "${file.originalname}"`);
+    addHistory(
+      db,
+      type === "upload"
+        ? `Uploaded "${file.originalname}"`
+        : `Saved processed audio "${song.title}"`
+    );
   });
   res.json({ ok: true, asset: song });
 });
 
 /* ------------------------------------------------------------------ */
 /* GET /api/library — everything the Library page needs                */
+/* (also enforces the 14-day trash TTL on every read)                  */
 /* ------------------------------------------------------------------ */
 router.get("/library", (_req: Request, res: Response) => {
-  const db = loadDb();
+  const db = mutateDb((d) => {
+    purgeExpiredTrash(d);
+    return d;
+  });
   res.json({
     songs: db.songs.filter((s) => !s.trashed),
     trash: db.songs.filter((s) => s.trashed),
@@ -331,6 +363,52 @@ router.get("/library", (_req: Request, res: Response) => {
     coverArt: db.coverArt,
     history: db.history,
   });
+});
+
+/* ------------------------------------------------------------------ */
+/* POST /api/library/workspace — create a workspace                    */
+/* ------------------------------------------------------------------ */
+router.post("/library/workspace", (req: Request, res: Response) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) {
+    res.status(400).json({ error: "Missing workspace name" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const workspace = mutateDb((db) => {
+    const w = { id: newId("ws"), name, songIds: [], createdAt: now, updatedAt: now };
+    db.workspaces.push(w);
+    addHistory(db, `Created workspace "${name}"`);
+    return w;
+  });
+  res.json({ ok: true, workspace });
+});
+
+/* ------------------------------------------------------------------ */
+/* POST /api/library/voice — save an offline voice profile             */
+/* ------------------------------------------------------------------ */
+router.post("/library/voice", (req: Request, res: Response) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) {
+    res.status(400).json({ error: "Missing voice name" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const voice = mutateDb((db) => {
+    const v = {
+      id: newId("voice"),
+      name,
+      description: req.body?.description ? String(req.body.description) : undefined,
+      gender: req.body?.gender ? String(req.body.gender) : undefined,
+      sourceAudioId: req.body?.sourceAudioId ? String(req.body.sourceAudioId) : undefined,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.voices.push(v);
+    addHistory(db, `Created voice profile "${name}"`);
+    return v;
+  });
+  res.json({ ok: true, voice });
 });
 
 /* ------------------------------------------------------------------ */
@@ -384,6 +462,7 @@ router.patch("/library/song/:id", (req: Request, res: Response) => {
       "public",
       "title",
       "commentCount",
+      "comments",
       "playlistIds",
       "workspaceId",
       "trashed",
@@ -391,12 +470,14 @@ router.patch("/library/song/:id", (req: Request, res: Response) => {
       "description",
       "lyrics",
       "styles",
+      "durationSeconds",
     ] as const;
     for (const key of allowed) {
       if (key in req.body) (song as any)[key] = req.body[key];
     }
     song.updatedAt = new Date().toISOString();
     if ("trashed" in req.body) {
+      song.trashedAt = req.body.trashed ? new Date().toISOString() : undefined;
       addHistory(db, req.body.trashed ? `Trashed "${song.title}"` : `Restored "${song.title}"`);
     }
     return song;
@@ -492,8 +573,6 @@ async function saveLocalCopy(acePath: string, songId?: string): Promise<string> 
   const local = path.join(config.libraryDir, name);
   if (fs.existsSync(local) && fs.statSync(local).size > 0) return local;
 
-  // If ACE-Step wrote the file into the shared /outputs volume we can just
-  // copy it; otherwise stream it through the /v1/audio endpoint.
   if (fs.existsSync(acePath)) {
     fs.copyFileSync(acePath, local);
     return local;

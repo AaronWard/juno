@@ -35,6 +35,9 @@ const EMPTY: JunoDb = {
   history: [],
 };
 
+/** Trashed songs are permanently deleted after this many days. */
+export const TRASH_TTL_DAYS = 14;
+
 function dbPath(): string {
   return path.join(config.dataDir, "juno-db.json");
 }
@@ -69,4 +72,27 @@ export function addHistory(db: JunoDb, event: string): void {
     event,
   });
   db.history = db.history.slice(0, 500);
+}
+
+/** Permanently delete songs trashed more than TRASH_TTL_DAYS ago.
+ *  Returns the number of songs purged. Uses `trashedAt` when present,
+ *  falling back to `updatedAt` for records trashed before this field
+ *  existed. */
+export function purgeExpiredTrash(db: JunoDb): number {
+  const cutoff = Date.now() - TRASH_TTL_DAYS * 24 * 60 * 60 * 1000;
+  const keep: Song[] = [];
+  let purged = 0;
+  for (const s of db.songs) {
+    const trashedAt = s.trashed
+      ? new Date(s.trashedAt || s.updatedAt).getTime()
+      : Infinity;
+    if (s.trashed && isFinite(trashedAt) && trashedAt < cutoff) {
+      purged++;
+      addHistory(db, `Auto-deleted "${s.title}" (trashed > ${TRASH_TTL_DAYS} days)`);
+    } else {
+      keep.push(s);
+    }
+  }
+  db.songs = keep;
+  return purged;
 }

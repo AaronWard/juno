@@ -1,5 +1,3 @@
-/** Trash page (DESIGN_DOC §19): search, type filter, sort, per-item
- *  Restore / Delete Forever, and Empty Trash with confirmation. */
 import React, { useMemo, useState } from "react";
 import { useJuno } from "../App";
 import { Toolbar } from "../components/Toolbar";
@@ -69,6 +67,10 @@ export function TrashPage() {
         onSort={setSort}
       />
 
+      <p className="inline-hint">
+        Trashed songs are deleted automatically after 14 days.
+      </p>
+
       <div className="song-list">
         {trashed.length === 0 && (
           <div className="empty-state">
@@ -87,7 +89,7 @@ export function TrashPage() {
                 <Badge>{s.type}</Badge>
                 <Badge tone="danger">Trashed</Badge>
               </div>
-              <div className="song-desc">Trashed {fmtRelative(s.updatedAt)}</div>
+              <div className="song-desc">Trashed {fmtRelative(s.trashedAt || s.updatedAt)}</div>
             </div>
             <div className="song-row-right" style={{ display: "flex", gap: 6 }}>
               <Button onClick={() => restoreSong(s.id)}>Restore</Button>

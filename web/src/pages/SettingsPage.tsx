@@ -1,5 +1,3 @@
-/** Settings page: backend status, model presets, host paths and local
- *  preferences. Replaces cloud account/billing screens — Juno is offline. */
 import React from "react";
 import { useJuno } from "../App";
 import { MODEL_PRESETS } from "../data/modelPresets";
@@ -74,8 +72,8 @@ export function SettingsPage() {
           </tbody>
         </table>
         <p className="inline-hint">
-          All three presets are XL-class and sized for a 32 GB GPU. Smaller
-          ACE-Step variants exist but are intentionally not exposed here.
+          All three presets are XL-class and sized for a 32 GB GPU. Presets
+          share one GPU slot: switching hot-swaps the loaded model.
         </p>
       </div>
 

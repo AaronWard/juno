@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Song } from "../data/mockSongs";
 import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
@@ -6,6 +6,7 @@ import { coverGradient } from "../lib/audio";
 import { Badge } from "./Badge";
 import { Button } from "./Button";
 import { SongOverflowMenu } from "./SongOverflowMenu";
+import { NotesModal } from "./NotesModal";
 import { presetLabel } from "../data/modelPresets";
 
 const TYPE_LABEL: Record<Song["type"], string> = {
@@ -21,8 +22,9 @@ const TYPE_LABEL: Record<Song["type"], string> = {
   replacement: "Replacement",
 };
 
-/** Song row (DESIGN_DOC §13) with default/hover/playing/selected/liked/
- *  processing/failed/trashed states. */
+/** Song row (DESIGN_DOC §13).
+ *  - 💬 opens a real notes modal (view + add), no silent counter bump.
+ *  - Dislike moves the song straight to Trash (restorable for 14 days). */
 export function SongRow({
   song,
   queueIds,
@@ -36,11 +38,13 @@ export function SongRow({
   selected?: boolean;
   onSelect?: () => void;
 }) {
-  const { currentSong, isPlaying, playSong, togglePlay, patchSong } = useJuno();
+  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong } = useJuno();
+  const [notesOpen, setNotesOpen] = useState(false);
   const isCurrent = currentSong?.id === song.id;
   const processing =
     song.generationStatus === "queued" || song.generationStatus === "running";
   const failed = song.generationStatus === "failed";
+  const noteCount = song.comments?.length ?? song.commentCount;
 
   const rowClass = [
     "song-row",
@@ -50,6 +54,16 @@ export function SongRow({
   ]
     .filter(Boolean)
     .join(" ");
+
+  const dislike = () => {
+    if (song.disliked) {
+      patchSong(song.id, { disliked: false });
+      return;
+    }
+    // Disliked songs go straight to Trash (auto-deleted after 14 days).
+    patchSong(song.id, { disliked: true, liked: false });
+    trashSong(song.id);
+  };
 
   return (
     <div className={rowClass} onClick={onSelect}>
@@ -106,21 +120,19 @@ export function SongRow({
           </Button>
           <Button
             variant="icon"
-            label="Dislike"
+            label={song.disliked ? "Remove dislike" : "Dislike (moves to Trash)"}
             active={song.disliked}
-            onClick={() => patchSong(song.id, { disliked: !song.disliked, liked: false })}
+            onClick={dislike}
           >
             👎
           </Button>
-          {showPlayCount && (
-            <Button
-              variant="icon"
-              label="Comment"
-              onClick={() => patchSong(song.id, { commentCount: song.commentCount + 1 })}
-            >
-              💬{song.commentCount > 0 ? ` ${song.commentCount}` : ""}
-            </Button>
-          )}
+          <Button
+            variant="icon"
+            label="Notes"
+            onClick={() => setNotesOpen(true)}
+          >
+            💬{noteCount > 0 ? ` ${noteCount}` : ""}
+          </Button>
           <Button
             variant="icon"
             label="Share (toggle public)"
@@ -140,6 +152,8 @@ export function SongRow({
       <div className="song-row-right" onClick={(e) => e.stopPropagation()}>
         <SongOverflowMenu song={song} />
       </div>
+
+      <NotesModal song={song} open={notesOpen} onClose={() => setNotesOpen(false)} />
     </div>
   );
 }

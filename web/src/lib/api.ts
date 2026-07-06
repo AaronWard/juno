@@ -2,9 +2,10 @@
  *
  *  The frontend talks ONLY to the local proxy under /api/* — never to the
  *  ACE-Step server directly. When the proxy is unreachable (e.g. running
- *  the frontend standalone in dev), callers fall back to mock behavior.
+ *  the frontend standalone in dev), callers fall back to local behavior.
  */
 import { Song } from "../data/mockSongs";
+import { Voice, Workspace } from "../data/mockLibrary";
 
 export interface HealthResponse {
   juno: string;
@@ -52,6 +53,20 @@ export interface GeneratePayload {
   sourceSongId?: string;
 }
 
+/** Optional metadata sent alongside an audio upload so locally processed
+ *  audio (Reverse, Crop, Speed, Sample, Mashup…) is saved as a proper,
+ *  typed library row rather than a plain upload. */
+export interface UploadMeta {
+  title?: string;
+  type?: Song["type"];
+  description?: string;
+  sourceSongId?: string;
+  workspaceId?: string;
+  durationSeconds?: number;
+  styles?: string[];
+  lyrics?: string;
+}
+
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     headers: { "content-type": "application/json" },
@@ -77,8 +92,7 @@ export const api = {
     }),
 
   /** Submit a generation task. When ACE-Step rejects the task the proxy
-   *  still records a failed Song row and returns it with ok:false; we
-   *  surface that row so the UI shows exactly one failed entry. Only a
+   *  still records a failed Song row and returns it with ok:false. Only a
    *  transport failure (proxy unreachable) throws without a song. */
   generate: async (payload: GeneratePayload) => {
     const res = await fetch("/api/generate", {
@@ -121,6 +135,23 @@ export const api = {
 
   library: () => json<any>("/api/library"),
 
+  createWorkspace: (name: string) =>
+    json<{ ok: boolean; workspace: Workspace }>("/api/library/workspace", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  createVoice: (voice: {
+    name: string;
+    gender?: Voice["gender"];
+    description?: string;
+    sourceAudioId?: string;
+  }) =>
+    json<{ ok: boolean; voice: Voice }>("/api/library/voice", {
+      method: "POST",
+      body: JSON.stringify(voice),
+    }),
+
   saveSong: (song: Partial<Song>) =>
     json<{ ok: boolean; song: Song }>("/api/library/song", {
       method: "POST",
@@ -142,9 +173,15 @@ export const api = {
       body: JSON.stringify({ songIds }),
     }),
 
-  upload: async (file: File) => {
+  upload: async (file: File, meta?: UploadMeta) => {
     const form = new FormData();
     form.append("file", file);
+    if (meta) {
+      for (const [k, v] of Object.entries(meta)) {
+        if (v == null) continue;
+        form.append(k, k === "styles" ? JSON.stringify(v) : String(v));
+      }
+    }
     const res = await fetch("/api/upload", { method: "POST", body: form });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body?.error || "Upload failed");

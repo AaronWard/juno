@@ -1,5 +1,8 @@
 /** Library page (DESIGN_DOC §15–17): 11 tabs, per-tab toolbars, +Audio
- *  upload, and a Trash entry point. */
+ *  upload, and a Trash entry point. All data now comes from the proxy
+ *  database (no mock rows); every tab has a proper empty state.
+ *  Deleting tracks lives in each row's ⋯ menu (Move to Trash / Delete
+ *  Forever) and in /trash. */
 import React, { useMemo, useState } from "react";
 import { useJuno } from "../App";
 import { LibraryTabs, LibraryTab } from "../components/LibraryTabs";
@@ -13,6 +16,15 @@ import { fmtDuration, fmtRelative } from "../lib/format";
 
 const SONG_SORTS = ["Newest First", "Oldest First", "Title A–Z", "Most Played"];
 const NAME_SORTS = ["Newest First", "Oldest First", "Name A–Z"];
+
+function EmptyTab({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="empty-state" style={{ gridColumn: "1 / -1" }}>
+      <h3>{title}</h3>
+      <p>{hint}</p>
+    </div>
+  );
+}
 
 export function LibraryPage() {
   const {
@@ -29,6 +41,7 @@ export function LibraryPage() {
     navigate,
     setPrefill,
     setActiveWorkspaceId,
+    defaultWorkspaceId,
   } = useJuno();
 
   const [tab, setTab] = useState<LibraryTab>("Songs");
@@ -147,10 +160,14 @@ export function LibraryPage() {
           )}
           <div className="song-list">
             {songRows.length === 0 && (
-              <div className="empty-state">
-                <h3>No songs match</h3>
-                <p>Clear filters or create something new.</p>
-              </div>
+              <EmptyTab
+                title={q || filters.length ? "No songs match" : "No songs yet"}
+                hint={
+                  q || filters.length
+                    ? "Clear filters or create something new."
+                    : "Create a song or import audio with ＋ Audio."
+                }
+              />
             )}
             {songRows.slice((page - 1) * 25, page * 25).map((s) => (
               <SongRow
@@ -168,6 +185,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, playlists.length)}
           <div className="card-grid">
+            {playlists.length === 0 && (
+              <EmptyTab title="No playlists yet" hint="Playlists you save will appear here." />
+            )}
             {playlists
               .filter((p) => matches(p.name))
               .map((p) => (
@@ -179,13 +199,7 @@ export function LibraryPage() {
                   />
                   <strong>{p.name}</strong>
                   <span className="inline-hint">{p.songIds.length} songs</span>
-                  <Button
-                    onClick={() => {
-                      navigate("/create");
-                    }}
-                  >
-                    Open
-                  </Button>
+                  <Button onClick={() => navigate("/create")}>Open</Button>
                 </div>
               ))}
           </div>
@@ -196,6 +210,12 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, workspaces.length)}
           <div className="card-grid">
+            {workspaces.length === 0 && (
+              <EmptyTab
+                title="No workspaces yet"
+                hint="Create one from the Create page (Save to… → ＋ Create new workspace)."
+              />
+            )}
             {workspaces
               .filter((w) => matches(w.name))
               .map((w) => (
@@ -207,7 +227,7 @@ export function LibraryPage() {
                   />
                   <strong>{w.name}</strong>
                   <span className="inline-hint">
-                    {songs.filter((s) => (s.workspaceId ?? "ws_my") === w.id && !s.trashed).length}{" "}
+                    {songs.filter((s) => (s.workspaceId ?? defaultWorkspaceId) === w.id && !s.trashed).length}{" "}
                     songs · updated {fmtRelative(w.updatedAt)}
                   </span>
                   <Button
@@ -228,6 +248,12 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, projects.length)}
           <div className="card-grid">
+            {projects.length === 0 && (
+              <EmptyTab
+                title="No Studio projects yet"
+                hint="Open the Studio to start arranging — saved sessions will appear here."
+              />
+            )}
             {projects
               .filter((p) => matches(p.name))
               .map((p) => (
@@ -252,6 +278,12 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, voices.length)}
           <div className="card-grid">
+            {voices.length === 0 && (
+              <EmptyTab
+                title="No voice profiles yet"
+                hint="Create one from the Create page with ＋ Voice."
+              />
+            )}
             {voices
               .filter((v) => matches(v.name, v.description))
               .map((v) => (
@@ -268,7 +300,12 @@ export function LibraryPage() {
                   {v.gender && v.gender !== "none" && <Badge>{v.gender}</Badge>}
                   <Button
                     onClick={() => {
-                      setPrefill({ vocalGender: v.gender || "none" });
+                      // The attached voice is now VISIBLE on the Create page
+                      // as a removable "🎙 Voice: …" chip.
+                      setPrefill({
+                        vocalGender: v.gender || "none",
+                        voiceName: v.name,
+                      });
                       navigate("/create");
                     }}
                   >
@@ -284,6 +321,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, lyricDocs.length)}
           <div className="card-grid">
+            {lyricDocs.length === 0 && (
+              <EmptyTab title="No saved lyrics yet" hint="Saved lyric documents will appear here." />
+            )}
             {lyricDocs
               .filter((d) => matches(d.title, d.text))
               .map((d) => (
@@ -308,6 +348,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, stylePresets.length)}
           <div className="card-grid">
+            {stylePresets.length === 0 && (
+              <EmptyTab title="No style presets yet" hint="Saved style presets will appear here." />
+            )}
             {stylePresets
               .filter((p) => matches(p.name, p.styles.join(" ")))
               .map((p) => {
@@ -351,6 +394,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, coverArt.length)}
           <div className="card-grid">
+            {coverArt.length === 0 && (
+              <EmptyTab title="No cover art yet" hint="Locally generated cover art will appear here." />
+            )}
             {coverArt
               .filter((c) => matches(c.title))
               .map((c) => (
@@ -374,6 +420,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], NAME_SORTS, hooks.length)}
           <div className="card-grid">
+            {hooks.length === 0 && tab === "Hooks" && (
+              <EmptyTab title="No hooks yet" hint="Short clips you save will appear here." />
+            )}
             {hooks
               .filter((h) => matches(h.title))
               .filter((h) => (tab === "Liked Hooks" ? likedHooks[h.id] : true))
@@ -402,10 +451,10 @@ export function LibraryPage() {
               ))}
             {tab === "Liked Hooks" &&
               hooks.filter((h) => likedHooks[h.id]).length === 0 && (
-                <div className="empty-state">
-                  <h3>No liked hooks yet</h3>
-                  <p>Like a hook in the Hooks tab and it will appear here.</p>
-                </div>
+                <EmptyTab
+                  title="No liked hooks yet"
+                  hint="Like a hook in the Hooks tab and it will appear here."
+                />
               )}
           </div>
         </>
@@ -415,6 +464,9 @@ export function LibraryPage() {
         <>
           {commonToolbar([], ["Newest First", "Oldest First"], history.length)}
           <div className="song-list">
+            {history.length === 0 && (
+              <EmptyTab title="No history yet" hint="Generations, uploads and edits will be logged here." />
+            )}
             {history
               .filter((h) => matches(h.event))
               .sort((a, b) =>

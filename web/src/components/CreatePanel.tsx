@@ -1,6 +1,17 @@
-/** Create control panel (DESIGN_DOC §6–11): Simple/Advanced modes, model
- *  selector, +Audio/+Voice/+Inspo, Lyrics/Styles/More Options cards, title,
- *  Save To, Create button with full status lifecycle, and model status. */
+/** Create control panel (DESIGN_DOC §6–11).
+ *
+ *  Changes:
+ *  - Attached context is now VISIBLE: Cover source, Inspiration reference,
+ *    and Voice each render as a removable chip above the Create button, so
+ *    "Use in Create" from the Library is no longer invisible.
+ *  - Cover mode: when a song's Cover action routed here, Create submits an
+ *    ACE-Step "cover" task with the source audio attached — describe the
+ *    NEW style in the prompt/styles (Suno-style cover flow).
+ *  - "＋ Create new workspace" actually creates one (name modal, persisted
+ *    to the proxy DB).
+ *  - "＋ Voice" saves a real voice profile to the library DB and attaches
+ *    it to the current creation.
+ */
 import React, { useEffect, useState } from "react";
 import { useJuno } from "../App";
 import { MODEL_PRESETS, PresetId, presetLabel } from "../data/modelPresets";
@@ -30,6 +41,8 @@ export function CreatePanel() {
     workspaces,
     activeWorkspaceId,
     setActiveWorkspaceId,
+    addWorkspace,
+    addVoice,
     prefill,
     setPrefill,
     voices,
@@ -46,7 +59,12 @@ export function CreatePanel() {
   const [styleInfluence, setStyleInfluence] = useState(50);
   const [exclude, setExclude] = useState("");
   const [title, setTitle] = useState("");
+
+  /* Attached context (all visible as removable chips) */
   const [referenceAudioPath, setReferenceAudioPath] = useState<string | undefined>();
+  const [inspirationTitle, setInspirationTitle] = useState<string | undefined>();
+  const [coverSource, setCoverSource] = useState<{ path: string; title: string } | undefined>();
+  const [attachedVoice, setAttachedVoice] = useState<string | undefined>();
   const [sourceSongId, setSourceSongId] = useState<string | undefined>();
 
   const [status, setStatus] = useState<CreateStatus>("idle");
@@ -56,13 +74,16 @@ export function CreatePanel() {
   const [voiceName, setVoiceName] = useState("");
   const [voiceDesc, setVoiceDesc] = useState("");
   const [voiceGender, setVoiceGender] = useState<"male" | "female" | "none">("none");
-  const [localVoices, setLocalVoices] = useState<string[]>([]);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [wsOpen, setWsOpen] = useState(false);
+  const [wsName, setWsName] = useState("");
+  const [wsBusy, setWsBusy] = useState(false);
 
   const preset = MODEL_PRESETS.find((p) => p.id === selectedPreset)!;
   const aceOk = health?.aceStep === "ok";
   const instrumental = lyricsMode === "instrumental";
 
-  /* Reuse Prompt / Use as Inspiration prefill */
+  /* Reuse Prompt / Use as Inspiration / Cover / Voice prefill */
   useEffect(() => {
     if (!prefill) return;
     if (prefill.prompt != null) setPrompt(prefill.prompt);
@@ -74,6 +95,15 @@ export function CreatePanel() {
     if (prefill.styleInfluence != null) setStyleInfluence(prefill.styleInfluence);
     if (prefill.title) setTitle(prefill.title);
     setReferenceAudioPath(prefill.referenceAudioPath);
+    setInspirationTitle(
+      prefill.referenceAudioPath ? prefill.inspirationTitle || "attached audio" : undefined
+    );
+    setCoverSource(
+      prefill.taskType === "cover" && prefill.srcAudioPath
+        ? { path: prefill.srcAudioPath, title: prefill.coverOfTitle || "source audio" }
+        : undefined
+    );
+    if (prefill.voiceName) setAttachedVoice(prefill.voiceName);
     setSourceSongId(prefill.sourceSongId);
     setPrefill(null);
   }, [prefill, setPrefill]);
@@ -85,7 +115,9 @@ export function CreatePanel() {
   const disabledReason = !canCreate
     ? status === "submitting"
       ? "Generation in progress"
-      : "Describe your song or add styles or lyrics first"
+      : coverSource
+        ? "Describe the new style for this cover (prompt or style chips)"
+        : "Describe your song or add styles or lyrics first"
     : !aceOk
       ? "ACE-Step is offline — a failed row will document the attempt"
       : undefined;
@@ -95,7 +127,7 @@ export function CreatePanel() {
     setError(null);
     try {
       await generate({
-        taskType: "text2music",
+        taskType: coverSource ? "cover" : "text2music",
         model: selectedPreset,
         prompt,
         styles: chips,
@@ -108,6 +140,7 @@ export function CreatePanel() {
         title: title || undefined,
         workspaceId: activeWorkspaceId,
         duration: 120,
+        srcAudioPath: coverSource?.path,
         referenceAudioPath,
         sourceSongId,
       });
@@ -119,13 +152,44 @@ export function CreatePanel() {
     }
   };
 
+  const saveVoice = async () => {
+    setVoiceBusy(true);
+    try {
+      const v = await addVoice({
+        name: voiceName.trim(),
+        gender: voiceGender,
+        description: voiceDesc || undefined,
+      });
+      setAttachedVoice(v.name);
+      if (voiceGender !== "none") setVocalGender(voiceGender);
+      setVoiceName("");
+      setVoiceDesc("");
+      setVoiceOpen(false);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const saveWorkspace = async () => {
+    const name = wsName.trim();
+    if (!name) return;
+    setWsBusy(true);
+    try {
+      await addWorkspace(name);
+      setWsName("");
+      setWsOpen(false);
+    } finally {
+      setWsBusy(false);
+    }
+  };
+
   const statusLabel: Record<CreateStatus, string> = {
-    idle: "Create",
+    idle: coverSource ? "Create Cover" : "Create",
     submitting: "Submitting…",
     queued: "Queued…",
     running: "Generating…",
     succeeded: "✓ Created",
-    failed: "Create",
+    failed: coverSource ? "Create Cover" : "Create",
   };
 
   return (
@@ -185,33 +249,81 @@ export function CreatePanel() {
                   id: s.id,
                   label: `♪ ${s.title}`,
                   onSelect: () => {
-                    setChips([...new Set([...chips, ...s.styles])]);
-                    setVocalGender(s.metadata.vocalGender || "none");
+                    setChips((c) => [...new Set([...c, ...s.styles])]);
+                    if (s.metadata.vocalGender) setVocalGender(s.metadata.vocalGender);
                     setWeirdness(s.metadata.weirdness);
                     setStyleInfluence(s.metadata.styleInfluence);
                     setReferenceAudioPath(s.localAudioPath);
+                    setInspirationTitle(s.title);
                     setSourceSongId(s.id);
                   },
                 })),
               ...voices.map((v) => ({
                 id: v.id,
                 label: `🎙 ${v.name}`,
-                onSelect: () => setVocalGender((v.gender as any) || "none"),
+                onSelect: () => {
+                  setAttachedVoice(v.name);
+                  setVocalGender((v.gender as any) || "none");
+                },
               })),
             ]}
           />
         </div>
       )}
 
+      {coverSource && (
+        <div className="attach-chip" role="status">
+          <span>
+            ♻ Cover of <strong>“{coverSource.title}”</strong> — describe the
+            new style below.
+          </span>
+          <button className="btn btn-ghost" onClick={() => setCoverSource(undefined)}>
+            Remove
+          </button>
+        </div>
+      )}
+      {inspirationTitle && (
+        <div className="attach-chip" role="status">
+          <span>
+            ✨ Inspiration: <strong>“{inspirationTitle}”</strong>
+            {referenceAudioPath ? " (audio attached as reference)" : " (styles copied)"}
+          </span>
+          <button
+            className="btn btn-ghost"
+            onClick={() => {
+              setInspirationTitle(undefined);
+              setReferenceAudioPath(undefined);
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      )}
+      {attachedVoice && (
+        <div className="attach-chip" role="status">
+          <span>
+            🎙 Voice: <strong>{attachedVoice}</strong>
+            {vocalGender !== "none" ? ` (${vocalGender})` : ""}
+          </span>
+          <button className="btn btn-ghost" onClick={() => setAttachedVoice(undefined)}>
+            Remove
+          </button>
+        </div>
+      )}
+
       <div>
         <label className="field-label" htmlFor="create-prompt">
-          {advanced ? "Prompt" : "Describe your song"}
+          {coverSource ? "New style" : advanced ? "Prompt" : "Describe your song"}
         </label>
         <textarea
           id="create-prompt"
           className="text-area"
           style={{ minHeight: advanced ? 72 : 140 }}
-          placeholder="Describe the song you want to create..."
+          placeholder={
+            coverSource
+              ? "e.g. icy synthwave, half-time drums, wide chorus"
+              : "Describe the song you want to create..."
+          }
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
@@ -268,21 +380,12 @@ export function CreatePanel() {
                 {
                   id: "new",
                   label: "＋ Create new workspace",
-                  onSelect: () => setActiveWorkspaceId("ws_my"),
+                  onSelect: () => setWsOpen(true),
                 },
               ]}
             />
           </div>
         </>
-      )}
-
-      {referenceAudioPath && (
-        <p className="inline-hint">
-          Reference audio attached (Use as Inspiration).{" "}
-          <button className="btn btn-ghost" onClick={() => setReferenceAudioPath(undefined)}>
-            Remove
-          </button>
-        </p>
       )}
 
       <Button
@@ -309,6 +412,34 @@ export function CreatePanel() {
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
 
       <Modal
+        title="New workspace"
+        open={wsOpen}
+        onClose={() => setWsOpen(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setWsOpen(false)}>Cancel</Button>
+            <Button variant="primary" loading={wsBusy} disabled={!wsName.trim()} onClick={saveWorkspace}>
+              Create workspace
+            </Button>
+          </>
+        }
+      >
+        <label className="field-label" htmlFor="ws-name">Workspace name</label>
+        <input
+          id="ws-name"
+          className="text-input"
+          value={wsName}
+          onChange={(e) => setWsName(e.target.value)}
+          placeholder="e.g. Film Sketches"
+          onKeyDown={(e) => e.key === "Enter" && saveWorkspace()}
+        />
+        <p className="inline-hint" style={{ marginTop: 8 }}>
+          Workspaces group songs on the Create page and are saved to the
+          local library database.
+        </p>
+      </Modal>
+
+      <Modal
         title="New voice profile"
         open={voiceOpen}
         onClose={() => setVoiceOpen(false)}
@@ -317,13 +448,9 @@ export function CreatePanel() {
             <Button variant="ghost" onClick={() => setVoiceOpen(false)}>Cancel</Button>
             <Button
               variant="primary"
+              loading={voiceBusy}
               disabled={!voiceName.trim()}
-              onClick={() => {
-                setLocalVoices([...localVoices, voiceName]);
-                setVoiceName("");
-                setVoiceDesc("");
-                setVoiceOpen(false);
-              }}
+              onClick={saveVoice}
             >
               Save
             </Button>
@@ -348,8 +475,8 @@ export function CreatePanel() {
             <textarea id="voice-desc" className="text-area" style={{ minHeight: 60 }} value={voiceDesc} onChange={(e) => setVoiceDesc(e.target.value)} />
           </div>
           <p className="inline-hint">
-            Offline voice profile — no verification or server-side training.
-            Optionally attach a source clip via ＋ Audio first.
+            Saved to your library (Voices tab) and attached to this creation.
+            Offline profile — no verification or server-side training.
           </p>
         </div>
       </Modal>

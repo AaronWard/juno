@@ -1,18 +1,22 @@
 /** Persistent bottom audio player (DESIGN_DOC §4).
  *
- *  Real playback: when the current song has a browser-playable audioUrl
- *  (uploads under /upload-audio, generated files under /library-audio) a
- *  hidden <audio> element drives the timeline.
- *  Mock playback: for mock rows without audio, a timer advances a simulated
- *  position so every player state is previewable offline.
+ *  Changes:
+ *  - 💬 opens the shared NotesModal (view + add notes) instead of a
+ *    write-only note box.
+ *  - ⋯ menu gains "Download" for the current track.
+ *  - The ⋯ and 🔊 popovers open UPWARD automatically (Dropdown flip), so
+ *    they no longer trail off the bottom of the screen.
+ *  - Queue drawer supports removing songs (see QueueDrawer).
  */
 import React, { useEffect, useRef, useState } from "react";
 import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
 import { coverGradient } from "../lib/audio";
+import { downloadUrl } from "../lib/dsp";
 import { Button } from "./Button";
 import { QueueDrawer } from "./QueueDrawer";
 import { Modal } from "./Modal";
+import { NotesModal } from "./NotesModal";
 import { Dropdown } from "./Dropdown";
 import { Slider } from "./Slider";
 import { Badge } from "./Badge";
@@ -34,7 +38,9 @@ export function BottomPlayer() {
     muted,
     setMuted,
     patchSong,
+    trashSong,
     navigate,
+    addHistoryEvent,
   } = useJuno();
 
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -45,9 +51,8 @@ export function BottomPlayer() {
   const [error, setError] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
-  const [commentOpen, setCommentOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const [comment, setComment] = useState("");
 
   const hasRealAudio = !!currentSong?.audioUrl;
 
@@ -82,7 +87,7 @@ export function BottomPlayer() {
     if (el) el.volume = muted ? 0 : volume;
   }, [volume, muted]);
 
-  /* mock playback clock */
+  /* simulated clock only for rows that don't have audio yet */
   useEffect(() => {
     if (!currentSong || hasRealAudio || !isPlaying) return;
     setDur(currentSong.durationSeconds);
@@ -104,6 +109,24 @@ export function BottomPlayer() {
     if (audioRef.current && hasRealAudio) audioRef.current.currentTime = v;
   };
 
+  const dislike = () => {
+    if (!currentSong) return;
+    if (currentSong.disliked) {
+      patchSong(currentSong.id, { disliked: false });
+      return;
+    }
+    patchSong(currentSong.id, { disliked: true, liked: false });
+    trashSong(currentSong.id); // disliked songs go to Trash
+  };
+
+  const download = () => {
+    if (!currentSong?.audioUrl) return;
+    const rawExt = currentSong.audioUrl.split("?")[0].split(".").pop() || "wav";
+    const ext = rawExt.length <= 5 ? rawExt : "wav";
+    downloadUrl(currentSong.audioUrl, `${currentSong.title}.${ext}`);
+    addHistoryEvent(`Downloaded "${currentSong.title}"`);
+  };
+
   const empty = !currentSong;
   const repeatLabel = repeat === "none" ? "⟳" : repeat === "one" ? "⟳¹" : "⟳∞";
 
@@ -115,6 +138,16 @@ export function BottomPlayer() {
         onLoadedMetadata={(e) => {
           setDur(e.currentTarget.duration);
           setLoading(false);
+          // Fix 0:00 badges on uploads: persist the real duration once known.
+          if (
+            currentSong &&
+            (!currentSong.durationSeconds || currentSong.durationSeconds === 0) &&
+            isFinite(e.currentTarget.duration)
+          ) {
+            patchSong(currentSong.id, {
+              durationSeconds: Math.round(e.currentTarget.duration),
+            });
+          }
         }}
         onWaiting={() => setLoading(true)}
         onCanPlay={() => setLoading(false)}
@@ -228,17 +261,14 @@ export function BottomPlayer() {
         </Button>
         <Button
           variant="icon"
-          label="Dislike"
+          label="Dislike (moves to Trash)"
           disabled={empty}
           active={currentSong?.disliked}
-          onClick={() =>
-            currentSong &&
-            patchSong(currentSong.id, { disliked: !currentSong.disliked, liked: false })
-          }
+          onClick={dislike}
         >
           👎
         </Button>
-        <Button variant="icon" label="Comment" disabled={empty} onClick={() => setCommentOpen(true)}>
+        <Button variant="icon" label="Notes" disabled={empty} onClick={() => setNotesOpen(true)}>
           💬
         </Button>
         <Button variant="icon" label="Share / export" disabled={empty} onClick={() => setShareOpen(true)}>
@@ -260,6 +290,12 @@ export function BottomPlayer() {
                     id: "studio",
                     label: "Open in Studio",
                     onSelect: () => navigate("/studio"),
+                  },
+                  {
+                    id: "download",
+                    label: "⬇ Download",
+                    disabled: !currentSong.audioUrl,
+                    onSelect: download,
                   },
                 ]
               : []
@@ -291,6 +327,12 @@ export function BottomPlayer() {
 
       {queueOpen && <QueueDrawer onClose={() => setQueueOpen(false)} />}
 
+      <NotesModal
+        song={currentSong}
+        open={notesOpen && !!currentSong}
+        onClose={() => setNotesOpen(false)}
+      />
+
       <Modal title="Track info" open={infoOpen && !!currentSong} onClose={() => setInfoOpen(false)}>
         {currentSong && (
           <div style={{ display: "grid", gap: 8 }}>
@@ -318,49 +360,22 @@ export function BottomPlayer() {
       </Modal>
 
       <Modal
-        title="Notes / comments"
-        open={commentOpen && !!currentSong}
-        onClose={() => setCommentOpen(false)}
+        title="Share / export"
+        open={shareOpen && !!currentSong}
+        onClose={() => setShareOpen(false)}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setCommentOpen(false)}>Cancel</Button>
-            <Button
-              variant="primary"
-              disabled={!comment.trim()}
-              onClick={() => {
-                if (currentSong) {
-                  patchSong(currentSong.id, {
-                    commentCount: currentSong.commentCount + 1,
-                  });
-                }
-                setComment("");
-                setCommentOpen(false);
-              }}
-            >
-              Save note
+            <Button variant="ghost" onClick={() => setShareOpen(false)}>Close</Button>
+            <Button variant="primary" disabled={!currentSong?.audioUrl} onClick={download}>
+              ⬇ Download audio
             </Button>
           </>
         }
       >
-        <label className="field-label" htmlFor="player-note">Local note</label>
-        <textarea
-          id="player-note"
-          className="text-area"
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-          placeholder="Notes stay on this machine."
-        />
-      </Modal>
-
-      <Modal
-        title="Share / export"
-        open={shareOpen && !!currentSong}
-        onClose={() => setShareOpen(false)}
-      >
         <p className="inline-hint">
-          Juno is offline: sharing means exporting locally. Use the export
-          action in a song's overflow menu to write a JSON manifest (and audio
-          file references) into ./outputs/exports on the host.
+          Juno is offline: download the audio file directly from your browser
+          here, or use a song's overflow menu → Export to write a JSON
+          manifest into ./outputs/exports on the host.
         </p>
       </Modal>
     </footer>

@@ -23,8 +23,13 @@ export const config = {
     process.env.JUNO_WEB_DIST || path.resolve(__dirname, "../../web/dist"),
 
   /** Model preset table. Exactly three XL presets are exposed to the UI.
-   *  Smaller ACE-Step models are intentionally NOT listed here; a developer
-   *  can add hidden presets by editing this file (see docs/DEVELOPMENT.md). */
+   *
+   *  VRAM NOTE: each XL DiT is ~11 GB in bf16 and the 4B LM needs ~9-10 GB,
+   *  so a 32 GB GPU can hold exactly ONE DiT + the LM. All presets therefore
+   *  target slot 1: switching presets re-initializes the primary slot
+   *  (hot-swap) instead of keeping three DiTs resident, which OOMs.
+   *  docker-compose must NOT set ACESTEP_CONFIG_PATH2/3 for the same
+   *  reason. */
   presets: {
     "juno-xl-quality": {
       id: "juno-xl-quality",
@@ -43,7 +48,7 @@ export const config = {
       aceModel: "acestep-v15-xl-turbo",
       ditPath: "/models/acestep-v15-xl-turbo",
       lmPath: "/models/acestep-5Hz-lm-4B",
-      slot: 2,
+      slot: 1, // hot-swapped into the primary slot (see VRAM NOTE)
       inferenceSteps: 8,
       cfgEnabled: false, // Turbo is the no-CFG fast path
       description: "Fast preview preset",
@@ -54,7 +59,7 @@ export const config = {
       aceModel: "acestep-v15-xl-base",
       ditPath: "/models/acestep-v15-xl-base",
       lmPath: "/models/acestep-5Hz-lm-4B",
-      slot: 3,
+      slot: 1, // hot-swapped into the primary slot (see VRAM NOTE)
       inferenceSteps: 50,
       cfgEnabled: true,
       description: "Advanced editing and Studio preset",

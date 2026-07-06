@@ -1,4 +1,16 @@
-/* Juno global styles — dark, high-density desktop workstation. */
+/* Juno global styles — dark, high-density desktop workstation.
+ *
+ * Fixes in this revision:
+ *  - .create-layout: was a THREE-column grid (450px 1px 1fr) with only two
+ *    children, so the workspace results rendered inside the 1px divider
+ *    column (broken vertical toolbar + squashed song rows). Now 2 columns.
+ *  - .modal-backdrop: z-index raised to 1000 (modals are also portaled to
+ *    <body>) so nothing on the page can overlap Upload/Voice dialogs.
+ *  - .dropdown-menu: z-index raised and a .up variant added so menus near
+ *    the bottom edge (sidebar "More", player ⋯ / 🔊) open upward.
+ *  - .attach-chip: visible removable context chips on the Create panel
+ *    (Cover source, Inspiration, Voice).
+ */
 
 *,
 *::before,
@@ -70,7 +82,7 @@ select {
   flex-direction: column;
   padding: 18px 12px;
   gap: 18px;
-  overflow: hidden;
+  overflow: visible; /* allow the "More" menu to escape the sidebar box */
 }
 .sidebar-logo-row {
   display: flex;
@@ -413,17 +425,15 @@ select {
   margin-top: 12px;
 }
 
-/* Create page split layout */
+/* Create page split layout — FIXED: two real columns */
 .create-layout {
   display: grid;
-  grid-template-columns: 450px 1px 1fr;
-  gap: 0 20px;
+  grid-template-columns: minmax(380px, var(--create-panel-width, 450px)) minmax(0, 1fr);
+  gap: 0 24px;
   align-items: start;
 }
-.create-divider {
-  background: var(--color-border-subtle);
-  width: 1px;
-  align-self: stretch;
+.workspace-results {
+  min-width: 0; /* allow the toolbar/rows to shrink instead of overflowing */
 }
 .create-panel {
   background: var(--color-bg-panel);
@@ -440,12 +450,26 @@ select {
   .create-layout {
     grid-template-columns: 1fr;
   }
-  .create-divider {
-    display: none;
-  }
   .create-panel {
     position: static;
   }
+}
+
+/* Attached-context chips (Cover / Inspiration / Voice) */
+.attach-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-accent-muted);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.attach-chip strong {
+  color: var(--color-text-primary);
 }
 
 .field-label {
@@ -661,13 +685,18 @@ select {
   border-radius: 14px;
   box-shadow: var(--shadow-popover);
   padding: 6px;
-  z-index: 60;
+  z-index: 500;
   max-height: 360px;
   overflow-y: auto;
 }
 .dropdown-menu.left {
   right: auto;
   left: 0;
+}
+/* Flip upward near the bottom edge (sidebar More, player menus). */
+.dropdown-menu.up {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 .menu-item {
   display: flex;
@@ -708,8 +737,23 @@ select {
   margin: 6px 4px;
 }
 
+/* Queue drawer rows */
+.queue-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
 /* ------------------------------------------------------------------ */
-/* Modal                                                               */
+/* Modal — portaled to <body>, always above everything                 */
 /* ------------------------------------------------------------------ */
 .modal-backdrop {
   position: fixed;
@@ -718,7 +762,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: 1000;
   padding: 24px;
 }
 .modal {
@@ -857,6 +901,9 @@ select {
   margin: 0 0 16px;
 }
 .breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-text-muted);
   font-size: 13px;
   margin-bottom: 8px;
@@ -953,7 +1000,7 @@ select {
   position: fixed;
   right: 16px;
   bottom: calc(var(--bottom-player-height) + 12px);
-  width: 320px;
+  width: 340px;
   max-height: 50vh;
   overflow-y: auto;
   background: var(--color-bg-panel);
@@ -961,7 +1008,7 @@ select {
   border-radius: 16px;
   box-shadow: var(--shadow-popover);
   padding: 12px;
-  z-index: 80;
+  z-index: 90;
 }
 
 .inline-error {

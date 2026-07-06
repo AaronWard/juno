@@ -19,7 +19,11 @@ interface Props {
 }
 
 /** Keyboard-navigable dropdown: Escape closes, click-outside closes,
- *  Arrow keys move between items, selected item is highlighted. */
+ *  Arrow keys move between items, selected item is highlighted.
+ *
+ *  The menu automatically opens UPWARD when there is not enough space
+ *  below the trigger — this fixes the sidebar "More" menu and the player
+ *  "⋯"/volume popovers trailing off the bottom of the screen. */
 export function Dropdown({
   trigger,
   items,
@@ -29,9 +33,21 @@ export function Dropdown({
   ariaLabel,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
+
+  const toggle = () => {
+    if (!open && rootRef.current) {
+      const r = rootRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - r.bottom;
+      const spaceAbove = r.top;
+      // Menu max-height is 360px; flip up when it wouldn't fit below.
+      setUp(spaceBelow < 380 && spaceAbove > spaceBelow);
+    }
+    setOpen((o) => !o);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -65,11 +81,19 @@ export function Dropdown({
     };
   }, [open]);
 
+  const menuClass = [
+    "dropdown-menu",
+    align === "left" && "left",
+    up && "up",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div className="dropdown" ref={rootRef}>
       <button
         className={triggerClass}
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
@@ -78,12 +102,7 @@ export function Dropdown({
         {trigger}
       </button>
       {open && (
-        <div
-          className={`dropdown-menu${align === "left" ? " left" : ""}`}
-          role="menu"
-          id={menuId}
-          ref={menuRef}
-        >
+        <div className={menuClass} role="menu" id={menuId} ref={menuRef}>
           {items?.map((item) => (
             <button
               key={item.id}

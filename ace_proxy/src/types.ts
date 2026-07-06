@@ -16,6 +16,12 @@ export type TaskType =
 
 export type GenerationStatus = "queued" | "running" | "succeeded" | "failed";
 
+export interface SongComment {
+  id: string;
+  at: string;
+  text: string;
+}
+
 export interface Song {
   id: string;
   title: string;
@@ -46,6 +52,7 @@ export interface Song {
   public: boolean;
   playCount: number;
   commentCount: number;
+  comments?: SongComment[];
   createdAt: string;
   updatedAt: string;
   sourceSongId?: string;
@@ -53,6 +60,8 @@ export interface Song {
   generationStatus?: "idle" | GenerationStatus;
   generationError?: string;
   trashed?: boolean;
+  /** ISO timestamp of when the song was moved to trash (14-day TTL). */
+  trashedAt?: string;
   metadata: {
     vocalGender?: "male" | "female" | "none";
     weirdness: number;

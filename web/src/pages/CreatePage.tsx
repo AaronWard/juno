@@ -1,6 +1,11 @@
-/** Create page (DESIGN_DOC §5): left create panel, right workspace results
- *  with breadcrumb, toolbar (search / filters / sort / view / quick pills /
- *  pagination ‹1›) and the song list of the active workspace. */
+/** Create page (DESIGN_DOC §5): left create panel, right workspace results.
+ *
+ *  LAYOUT FIX: the grid previously declared THREE columns
+ *  (450px 1px 1fr) but only rendered two children, so the results section
+ *  was squeezed into the 1px divider column — which is why the toolbar and
+ *  song rows stacked into a broken vertical strip. The grid is now two
+ *  columns (see .create-layout in global.css).
+ */
 import React, { useMemo, useState } from "react";
 import { useJuno } from "../App";
 import { CreatePanel } from "../components/CreatePanel";
@@ -12,8 +17,14 @@ const SORTS = ["Newest First", "Oldest First", "Title A–Z", "Most Played"];
 const PAGE_SIZE = 25;
 
 export function CreatePage() {
-  const { songs, workspaces, activeWorkspaceId, setActiveWorkspaceId, health } =
-    useJuno();
+  const {
+    songs,
+    workspaces,
+    activeWorkspaceId,
+    setActiveWorkspaceId,
+    defaultWorkspaceId,
+    health,
+  } = useJuno();
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<string[]>([]);
   const [sort, setSort] = useState(SORTS[0]);
@@ -27,7 +38,7 @@ export function CreatePage() {
 
   const rows = useMemo(() => {
     let list = songs.filter(
-      (s) => !s.trashed && (s.workspaceId ?? "ws_my") === activeWorkspaceId
+      (s) => !s.trashed && (s.workspaceId ?? defaultWorkspaceId) === activeWorkspaceId
     );
     const q = search.trim().toLowerCase();
     if (q) {
@@ -62,7 +73,7 @@ export function CreatePage() {
       }
     });
     return list;
-  }, [songs, activeWorkspaceId, search, filters, sort]);
+  }, [songs, activeWorkspaceId, defaultWorkspaceId, search, filters, sort]);
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -127,9 +138,9 @@ export function CreatePage() {
 
         {health?.aceStep !== "ok" && (
           <p className="inline-hint" role="status">
-            ACE-Step backend is {health ? health.aceStep : "connecting…"} — mock
-            songs remain playable and new generations will surface errors in
-            their rows.
+            ACE-Step backend is {health ? health.aceStep : "connecting…"} —
+            new generations will surface errors in their rows until it is
+            ready.
           </p>
         )}
 

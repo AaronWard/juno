@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./Button";
 
 interface Props {
@@ -10,9 +11,12 @@ interface Props {
 }
 
 /** Reusable modal: focus-trapped, Escape closes, backdrop click closes.
- *  Used for Upload Audio, Cover, Extend, Mashup, Crop, Replace Section,
- *  Export, Rename, Delete confirmation, Model initialization, and
- *  Generation error details. */
+ *
+ *  Rendered through a React portal onto document.body with a very high
+ *  z-index. This fixes the bug where song-row thumbnails and other page
+ *  content bled through modals opened from inside the sticky Create panel
+ *  (position:sticky creates a stacking context, so an inline modal's
+ *  z-index only competed within that context). */
 export function Modal({ title, open, onClose, children, footer }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -22,7 +26,6 @@ export function Modal({ title, open, onClose, children, footer }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
       if (e.key === "Tab" && ref.current) {
-        // simple focus trap
         const focusables = ref.current.querySelectorAll<HTMLElement>(
           'button, input, textarea, select, [tabindex]:not([tabindex="-1"])'
         );
@@ -39,7 +42,6 @@ export function Modal({ title, open, onClose, children, footer }: Props) {
       }
     };
     document.addEventListener("keydown", onKey);
-    // focus first focusable
     setTimeout(() => {
       ref.current
         ?.querySelector<HTMLElement>("button, input, textarea, select")
@@ -52,7 +54,7 @@ export function Modal({ title, open, onClose, children, footer }: Props) {
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
@@ -66,6 +68,7 @@ export function Modal({ title, open, onClose, children, footer }: Props) {
           {footer ?? <Button onClick={onClose}>Close</Button>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -3,9 +3,10 @@ import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
 import { coverGradient } from "../lib/audio";
 
-/** Local queue drawer opened from the bottom player. */
+/** Local queue drawer opened from the bottom player.
+ *  Each row now has a ✕ button to remove the song from the queue. */
 export function QueueDrawer({ onClose }: { onClose: () => void }) {
-  const { queue, songs, currentSong, playSong } = useJuno();
+  const { queue, songs, currentSong, playSong, removeFromQueue } = useJuno();
   const items = queue
     .map((id) => songs.find((s) => s.id === id))
     .filter((s): s is NonNullable<typeof s> => !!s);
@@ -18,12 +19,16 @@ export function QueueDrawer({ onClose }: { onClose: () => void }) {
       </div>
       {items.length === 0 && <p className="inline-hint">Queue is empty.</p>}
       {items.map((s) => (
-        <button
+        <div
           key={s.id}
           className={`menu-item${currentSong?.id === s.id ? " selected" : ""}`}
-          onClick={() => playSong(s.id, queue)}
+          style={{ cursor: "default" }}
         >
-          <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <button
+            className="queue-row-main"
+            onClick={() => playSong(s.id, queue)}
+            title={`Play ${s.title}`}
+          >
             <span
               aria-hidden="true"
               style={{
@@ -34,12 +39,28 @@ export function QueueDrawer({ onClose }: { onClose: () => void }) {
                 background: coverGradient(s.id),
               }}
             />
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
               {s.title}
             </span>
+          </button>
+          <span className="inline-hint" style={{ flex: "none" }}>
+            {fmtDuration(s.durationSeconds)}
           </span>
-          <span className="inline-hint">{fmtDuration(s.durationSeconds)}</span>
-        </button>
+          <button
+            className="btn btn-icon"
+            aria-label={`Remove ${s.title} from queue`}
+            title="Remove from queue"
+            onClick={() => removeFromQueue(s.id)}
+          >
+            ✕
+          </button>
+        </div>
       ))}
     </div>
   );

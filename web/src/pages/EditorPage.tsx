@@ -1,8 +1,13 @@
-/** Editor page (DESIGN_DOC §21): single-song waveform editor.
- *  Waveform with drag selection, section markers derived from lyrics tags,
- *  and actions: Crop / Remove Section (local), Replace Section (ACE-Step
- *  repaint), Adjust Speed / Reverse (local), Export. */
-import React, { useMemo, useRef, useState } from "react";
+/** Editor page (DESIGN_DOC §21): single-song waveform editor — now REAL.
+ *
+ *  - The waveform is computed from the song's actual decoded audio (falls
+ *    back to a deterministic mock only when the row has no audio yet).
+ *  - Crop / Remove Section / Adjust Speed / Reverse render REAL audio via
+ *    the Web Audio API and save the result as a new playable track.
+ *  - Replace Section still submits an ACE-Step "repaint" task.
+ *  - Download saves the audio through the browser.
+ */
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useJuno } from "../App";
 import { mockWaveform } from "../lib/audio";
 import { fmtDuration } from "../lib/format";
@@ -10,15 +15,35 @@ import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 import { Slider } from "../components/Slider";
 import { Modal } from "../components/Modal";
-import { newId } from "../lib/ids";
 import { Song } from "../data/mockSongs";
 import { api } from "../lib/api";
 import { presetLabel } from "../data/modelPresets";
+import {
+  bufferToFile,
+  changeSpeed,
+  computePeaks,
+  cropBuffer,
+  downloadUrl,
+  loadBuffer,
+  removeSection,
+  reverseBuffer,
+} from "../lib/dsp";
 
 const BAR_COUNT = 120;
 
 export function EditorPage({ songId }: { songId: string }) {
-  const { songs, navigate, addSong, addHistoryEvent, generate, playSong, currentSong, isPlaying, togglePlay } = useJuno();
+  const {
+    songs,
+    navigate,
+    addSong,
+    addHistoryEvent,
+    generate,
+    playSong,
+    currentSong,
+    isPlaying,
+    togglePlay,
+    patchSong,
+  } = useJuno();
   const song = songs.find((s) => s.id === songId);
 
   const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
@@ -28,19 +53,49 @@ export function EditorPage({ songId }: { songId: string }) {
   const [replacePrompt, setReplacePrompt] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
+  const [peaks, setPeaks] = useState<number[] | null>(null);
   const waveRef = useRef<HTMLDivElement>(null);
 
-  const bars = useMemo(() => mockWaveform(songId, BAR_COUNT), [songId]);
+  /* Decode the real audio: real waveform + true duration. */
+  useEffect(() => {
+    setBuffer(null);
+    setPeaks(null);
+    if (!song?.audioUrl) return;
+    let cancelled = false;
+    loadBuffer(song.audioUrl)
+      .then((b) => {
+        if (cancelled) return;
+        setBuffer(b);
+        setPeaks(computePeaks(b, BAR_COUNT));
+        const real = Math.round(b.duration);
+        if (real > 0 && song.durationSeconds !== real) {
+          patchSong(song.id, { durationSeconds: real });
+        }
+      })
+      .catch(() => {
+        /* keep mock waveform */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [song?.id, song?.audioUrl]);
+
+  const mockBars = useMemo(() => mockWaveform(songId, BAR_COUNT), [songId]);
+  const bars = peaks ?? mockBars;
+
+  const duration = buffer?.duration ?? song?.durationSeconds ?? 0;
 
   const sections = useMemo(() => {
-    if (!song?.lyrics) return [] as { tag: string; at: number }[];
+    if (!song?.lyrics || !duration) return [] as { tag: string; at: number }[];
     const tags = [...song.lyrics.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1]);
     const unique = tags.filter((t, i) => tags.indexOf(t) === i);
     return unique.map((tag, i) => ({
       tag,
-      at: Math.round(((i + 0.5) / unique.length) * (song.durationSeconds || 1)),
+      at: Math.round(((i + 0.5) / unique.length) * duration),
     }));
-  }, [song]);
+  }, [song?.lyrics, duration]);
 
   if (!song) {
     return (
@@ -54,35 +109,57 @@ export function EditorPage({ songId }: { songId: string }) {
     );
   }
 
+  const hasAudio = !!song.audioUrl && !!buffer;
+
   const posFromEvent = (e: React.MouseEvent): number => {
     const el = waveRef.current;
-    if (!el) return 0;
+    if (!el || !duration) return 0;
     const rect = el.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    return Math.round(frac * song.durationSeconds);
+    return Math.round(frac * duration);
   };
 
-  const derivative = (type: Song["type"], suffix: string, duration: number) => {
-    const now = new Date().toISOString();
-    const copy: Song = {
-      ...song,
-      id: newId("song"),
-      title: `${song.title} (${suffix})`,
-      type,
-      durationSeconds: Math.max(1, Math.round(duration)),
-      sourceSongId: song.id,
-      liked: false,
-      disliked: false,
-      public: false,
-      playCount: 0,
-      commentCount: 0,
-      createdAt: now,
-      updatedAt: now,
-      generationStatus: "idle",
-    };
-    addSong(copy);
-    addHistoryEvent(`Editor: ${suffix} "${song.title}"`);
-    setNotice(`Created "${copy.title}" in the workspace.`);
+  /** Render a REAL derivative and save it as a playable track. */
+  const renderLocal = async (
+    label: string,
+    type: Song["type"],
+    fn: (b: AudioBuffer) => AudioBuffer | Promise<AudioBuffer>
+  ) => {
+    if (!buffer) {
+      setNotice("This song has no decodable audio yet.");
+      return;
+    }
+    setBusy(label);
+    setNotice(null);
+    try {
+      const out = await fn(buffer);
+      const title = `${song.title} (${label})`;
+      const res = await api.upload(bufferToFile(out, title), {
+        title,
+        type,
+        description: `${label} of "${song.title}" — processed locally in the Editor`,
+        sourceSongId: song.id,
+        workspaceId: song.workspaceId,
+        durationSeconds: Math.round(out.duration),
+        styles: song.styles,
+        lyrics: song.lyrics,
+      });
+      addSong(res.asset);
+      addHistoryEvent(`Editor: ${label} "${song.title}"`);
+      setNotice(`Created "${title}" — it is playable in the workspace now.`);
+    } catch (e: any) {
+      setNotice(`${label} failed: ${e?.message || e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const download = () => {
+    if (!song.audioUrl) return;
+    const rawExt = song.audioUrl.split("?")[0].split(".").pop() || "wav";
+    const ext = rawExt.length <= 5 ? rawExt : "wav";
+    downloadUrl(song.audioUrl, `${song.title}.${ext}`);
+    addHistoryEvent(`Downloaded "${song.title}"`);
   };
 
   const selLen = sel ? sel.end - sel.start : 0;
@@ -100,7 +177,7 @@ export function EditorPage({ songId }: { songId: string }) {
           <h1 className="page-title">{song.title}</h1>
           <span className="inline-hint">
             <Badge tone="accent">{presetLabel(song.model)}</Badge>{" "}
-            {fmtDuration(song.durationSeconds)} ·{" "}
+            {fmtDuration(duration)} ·{" "}
             {song.metadata.instrumental ? "Instrumental" : "Vocal"} ·{" "}
             {song.styles.join(", ") || "no styles"}
           </span>
@@ -112,6 +189,9 @@ export function EditorPage({ songId }: { songId: string }) {
             }
           >
             {currentSong?.id === song.id && isPlaying ? "⏸ Pause" : "▶ Play"}
+          </Button>
+          <Button disabled={!song.audioUrl} onClick={download}>
+            ⬇ Download
           </Button>
           <Button
             variant="primary"
@@ -135,6 +215,12 @@ export function EditorPage({ songId }: { songId: string }) {
       </div>
 
       {notice && <p className="inline-hint" role="status">{notice}</p>}
+      {!song.audioUrl && (
+        <p className="inline-hint" role="status">
+          This song has no audio yet — editing actions are disabled until a
+          generation finishes or audio is uploaded.
+        </p>
+      )}
 
       {/* waveform */}
       <div
@@ -143,7 +229,7 @@ export function EditorPage({ songId }: { songId: string }) {
         role="slider"
         aria-label="Waveform selection"
         aria-valuemin={0}
-        aria-valuemax={song.durationSeconds}
+        aria-valuemax={Math.round(duration)}
         aria-valuenow={sel?.start ?? 0}
         tabIndex={0}
         onMouseDown={(e) => {
@@ -160,7 +246,7 @@ export function EditorPage({ songId }: { songId: string }) {
         onMouseLeave={() => setDragFrom(null)}
       >
         {bars.map((h, i) => {
-          const at = (i / BAR_COUNT) * song.durationSeconds;
+          const at = duration ? (i / BAR_COUNT) * duration : 0;
           const inSel = sel && at >= sel.start && at <= sel.end;
           return (
             <span
@@ -174,7 +260,7 @@ export function EditorPage({ songId }: { songId: string }) {
           <span
             key={s.tag}
             className="wave-marker"
-            style={{ left: `${(s.at / song.durationSeconds) * 100}%` }}
+            style={{ left: `${duration ? (s.at / duration) * 100 : 0}%` }}
             title={`[${s.tag}] at ${fmtDuration(s.at)}`}
           >
             {s.tag}
@@ -182,6 +268,11 @@ export function EditorPage({ songId }: { songId: string }) {
         ))}
       </div>
       <p className="inline-hint">
+        {peaks
+          ? "Waveform computed from the actual audio. "
+          : song.audioUrl
+            ? "Decoding audio… "
+            : ""}
         {sel && selLen > 0
           ? `Selection ${fmtDuration(sel.start)} – ${fmtDuration(sel.end)} (${fmtDuration(selLen)})`
           : "Drag across the waveform to select a region."}
@@ -192,18 +283,25 @@ export function EditorPage({ songId }: { songId: string }) {
         <div className="card" style={{ display: "grid", gap: 8 }}>
           <strong>Section actions</strong>
           <Button
-            disabled={!sel || selLen < 1}
-            onClick={() => sel && derivative("cropped", "Cropped", selLen)}
-          >
-            ✂ Crop to selection <span className="inline-hint">(local)</span>
-          </Button>
-          <Button
-            disabled={!sel || selLen < 1}
+            disabled={!hasAudio || !sel || selLen < 1}
+            loading={busy === "Cropped"}
             onClick={() =>
-              sel && derivative("cropped", "Section removed", song.durationSeconds - selLen)
+              sel && renderLocal("Cropped", "cropped", (b) => cropBuffer(b, sel.start, sel.end))
             }
           >
-            ⌫ Remove Section <span className="inline-hint">(local)</span>
+            ✂ Crop to selection <span className="inline-hint">(local, real render)</span>
+          </Button>
+          <Button
+            disabled={!hasAudio || !sel || selLen < 1}
+            loading={busy === "Section removed"}
+            onClick={() =>
+              sel &&
+              renderLocal("Section removed", "cropped", (b) =>
+                removeSection(b, sel.start, sel.end)
+              )
+            }
+          >
+            ⌫ Remove Section <span className="inline-hint">(local, real render)</span>
           </Button>
           <Button
             disabled={!sel || selLen < 1}
@@ -215,15 +313,28 @@ export function EditorPage({ songId }: { songId: string }) {
           <strong style={{ marginTop: 8 }}>Whole-song actions</strong>
           <Slider label="Speed" value={speed} min={50} max={200} onChange={setSpeed} formatValue={(v) => `${(v / 100).toFixed(2)}x`} />
           <Button
+            disabled={!hasAudio}
+            loading={busy === `${(speed / 100).toFixed(2)}x`}
             onClick={() =>
-              derivative("remix", `${(speed / 100).toFixed(2)}x`, song.durationSeconds / (speed / 100))
+              renderLocal(`${(speed / 100).toFixed(2)}x`, "remix", (b) =>
+                changeSpeed(b, speed / 100)
+              )
             }
           >
             🕒 Create speed-adjusted version
           </Button>
-          <Button onClick={() => derivative("reversed", "Reversed", song.durationSeconds)}>
-            ↺ Reverse (local)
+          <Button
+            disabled={!hasAudio}
+            loading={busy === "Reversed"}
+            onClick={() => renderLocal("Reversed", "reversed", reverseBuffer)}
+          >
+            ↺ Reverse (local, real render)
           </Button>
+          <p className="inline-hint">
+            Local actions decode the audio, process it in the browser and
+            save a new WAV to your library. Speed changes shift pitch
+            (resample-style).
+          </p>
         </div>
 
         {/* lyrics panel */}
@@ -261,7 +372,7 @@ export function EditorPage({ songId }: { songId: string }) {
                     title: `${song.title} (Replace)`,
                     prompt: replacePrompt || song.description,
                     styles: song.styles,
-                    duration: song.durationSeconds,
+                    duration: Math.round(duration),
                     srcAudioPath: song.localAudioPath,
                     repaintStart: sel.start,
                     repaintEnd: sel.end,

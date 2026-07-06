@@ -2,12 +2,12 @@
  *
  *  State model
  *  -----------
- *  A single React context (JunoStore) holds the local library, the player
- *  queue, health/model status and the Create-form prefill used by
- *  "Reuse Prompt" / "Use as Inspiration". Data starts from mock records and
- *  is merged with the proxy's /api/library when the backend is reachable.
- *  Metadata mutations are optimistic in the UI and mirrored to the proxy on
- *  a best-effort basis so the app keeps working when ACE-Step is offline.
+ *  CLEAN SLATE: mock data has been removed. The proxy database at
+ *  /data/juno-db.json is the single source of truth; on boot the store is
+ *  hydrated from /api/library and starts empty on a fresh install. A
+ *  default "My Workspace" is created (and persisted) if none exists yet.
+ *  Metadata mutations are optimistic in the UI and mirrored to the proxy
+ *  best-effort so the app keeps working when ACE-Step is offline.
  */
 import React, {
   createContext,
@@ -26,17 +26,16 @@ import { StudioPage } from "./pages/StudioPage";
 import { EditorPage } from "./pages/EditorPage";
 import { TrashPage } from "./pages/TrashPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { MOCK_SONGS, Song } from "./data/mockSongs";
+import { Song } from "./data/mockSongs";
 import {
-  MOCK_COVER_ART,
-  MOCK_HISTORY,
-  MOCK_HOOKS,
-  MOCK_LYRICS,
-  MOCK_PLAYLISTS,
-  MOCK_PROJECTS,
-  MOCK_STYLE_PRESETS,
-  MOCK_VOICES,
-  MOCK_WORKSPACES,
+  CoverArt,
+  HistoryEvent,
+  Hook,
+  LyricDoc,
+  Playlist,
+  StudioProject,
+  StylePreset,
+  Voice,
   Workspace,
 } from "./data/mockLibrary";
 import { api, GeneratePayload, HealthResponse } from "./lib/api";
@@ -58,7 +57,14 @@ export interface CreatePrefill {
   vocalGender?: "male" | "female" | "none";
   weirdness?: number;
   styleInfluence?: number;
+  /** "Use as Inspiration": reference audio + a visible label. */
   referenceAudioPath?: string;
+  inspirationTitle?: string;
+  /** "Cover": source audio + label — Create submits task_type "cover". */
+  srcAudioPath?: string;
+  coverOfTitle?: string;
+  /** Voice attached from the Library ("Use in Create"). */
+  voiceName?: string;
   sourceSongId?: string;
   taskType?: string;
   title?: string;
@@ -70,17 +76,25 @@ interface JunoStore {
 
   songs: Song[];
   workspaces: Workspace[];
-  playlists: typeof MOCK_PLAYLISTS;
-  voices: typeof MOCK_VOICES;
-  stylePresets: typeof MOCK_STYLE_PRESETS;
-  lyricDocs: typeof MOCK_LYRICS;
-  hooks: typeof MOCK_HOOKS;
-  coverArt: typeof MOCK_COVER_ART;
-  projects: typeof MOCK_PROJECTS;
-  history: typeof MOCK_HISTORY;
+  playlists: Playlist[];
+  voices: Voice[];
+  stylePresets: StylePreset[];
+  lyricDocs: LyricDoc[];
+  hooks: Hook[];
+  coverArt: CoverArt[];
+  projects: StudioProject[];
+  history: HistoryEvent[];
 
   activeWorkspaceId: string;
   setActiveWorkspaceId: (id: string) => void;
+  /** Fallback workspace for songs saved before workspaces existed. */
+  defaultWorkspaceId: string;
+  addWorkspace: (name: string) => Promise<Workspace>;
+  addVoice: (v: {
+    name: string;
+    gender?: Voice["gender"];
+    description?: string;
+  }) => Promise<Voice>;
 
   patchSong: (id: string, patch: Partial<Song>) => void;
   addSong: (song: Song) => void;
@@ -98,6 +112,7 @@ interface JunoStore {
   playNext: () => void;
   playPrev: () => void;
   queue: string[];
+  removeFromQueue: (id: string) => void;
   shuffle: boolean;
   setShuffle: (v: boolean) => void;
   repeat: RepeatMode;
@@ -136,6 +151,8 @@ function currentRoute(): string {
   return h || "/create";
 }
 
+const nowIso = () => new Date().toISOString();
+
 /* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
@@ -144,11 +161,20 @@ export default function App() {
   const [route, setRoute] = useState(currentRoute());
   const [collapsed, setCollapsed] = useState(loadPref("sidebarCollapsed", false));
 
-  const [songs, setSongs] = useState<Song[]>(MOCK_SONGS);
-  const [workspaces] = useState(MOCK_WORKSPACES);
-  const [history, setHistory] = useState(MOCK_HISTORY);
+  /* Clean slate — everything is hydrated from the proxy DB. */
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [voices, setVoices] = useState<Voice[]>([]);
+  const [stylePresets, setStylePresets] = useState<StylePreset[]>([]);
+  const [lyricDocs, setLyricDocs] = useState<LyricDoc[]>([]);
+  const [hooks, setHooks] = useState<Hook[]>([]);
+  const [coverArt, setCoverArt] = useState<CoverArt[]>([]);
+  const [projects] = useState<StudioProject[]>([]);
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
+
   const [activeWorkspaceId, setActiveWorkspaceIdRaw] = useState(
-    loadPref("workspace", "ws_my")
+    loadPref("workspace", "")
   );
 
   const [queue, setQueue] = useState<string[]>([]);
@@ -166,6 +192,7 @@ export default function App() {
   const [prefill, setPrefill] = useState<CreatePrefill | null>(null);
 
   const pendingTaskIds = useRef<Set<string>>(new Set());
+  const bootstrappedWs = useRef(false);
 
   /* routing */
   useEffect(() => {
@@ -177,7 +204,12 @@ export default function App() {
     window.location.hash = r;
   }, []);
 
-  /* backend bootstrap: health + library merge */
+  const setActiveWorkspaceId = useCallback((id: string) => {
+    setActiveWorkspaceIdRaw(id);
+    savePref("workspace", id);
+  }, []);
+
+  /* backend bootstrap: health + library hydration */
   const refreshHealth = useCallback(() => {
     api
       .health()
@@ -192,22 +224,51 @@ export default function App() {
     const t = setInterval(refreshHealth, 30000);
     api
       .library()
-      .then((lib) => {
-        if (Array.isArray(lib?.songs) && lib.songs.length) {
-          setSongs((prev) => {
-            const known = new Set(prev.map((s) => s.id));
-            const extra = [...lib.songs, ...(lib.trash || [])].filter(
-              (s: Song) => !known.has(s.id)
-            );
-            return [...extra, ...prev];
-          });
+      .then(async (lib) => {
+        setSongs([...(lib?.songs || []), ...(lib?.trash || [])]);
+        setPlaylists(lib?.playlists || []);
+        setVoices(lib?.voices || []);
+        setStylePresets(lib?.styles || []);
+        setLyricDocs(lib?.lyrics || []);
+        setHooks(lib?.hooks || []);
+        setCoverArt(lib?.coverArt || []);
+        setHistory(lib?.history || []);
+
+        /* Resume polling for generations that were still running. */
+        for (const t of lib?.tasks || []) {
+          if (t.status === "queued" || t.status === "running") {
+            pendingTaskIds.current.add(t.id);
+          }
         }
-        if (Array.isArray(lib?.history) && lib.history.length) {
-          setHistory((prev) => [...lib.history, ...prev]);
+
+        let ws: Workspace[] = lib?.workspaces || [];
+        if (!ws.length && !bootstrappedWs.current) {
+          bootstrappedWs.current = true;
+          try {
+            const res = await api.createWorkspace("My Workspace");
+            ws = [res.workspace];
+          } catch {
+            ws = [
+              { id: "ws_default", name: "My Workspace", songIds: [], createdAt: nowIso(), updatedAt: nowIso() },
+            ];
+          }
         }
+        setWorkspaces(ws);
+        setActiveWorkspaceIdRaw((cur) =>
+          ws.some((w) => w.id === cur) ? cur : ws[0]?.id || ""
+        );
       })
       .catch(() => {
-        /* proxy offline — mock data only */
+        /* proxy offline — start empty, with a session-only workspace */
+        const ws = {
+          id: "ws_default",
+          name: "My Workspace",
+          songIds: [],
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        setWorkspaces([ws]);
+        setActiveWorkspaceIdRaw((cur) => cur || ws.id);
       });
     return () => clearInterval(t);
   }, [refreshHealth]);
@@ -231,7 +292,7 @@ export default function App() {
                     generationStatus: task.status,
                     generationError: task.error,
                     audioUrl: task.audioUrl || s.audioUrl,
-                    updatedAt: new Date().toISOString(),
+                    updatedAt: nowIso(),
                   }
                 : s
             )
@@ -248,19 +309,19 @@ export default function App() {
   const patchSong = useCallback((id: string, patch: Partial<Song>) => {
     setSongs((prev) =>
       prev.map((s) =>
-        s.id === id ? { ...s, ...patch, updatedAt: new Date().toISOString() } : s
+        s.id === id ? { ...s, ...patch, updatedAt: nowIso() } : s
       )
     );
     api.patchSong(id, patch).catch(() => {});
   }, []);
 
   const addSong = useCallback((song: Song) => {
-    setSongs((prev) => [song, ...prev]);
+    setSongs((prev) => [song, ...prev.filter((s) => s.id !== song.id)]);
   }, []);
 
   const addHistoryEvent = useCallback((event: string) => {
     setHistory((prev) => [
-      { id: newId("hist"), at: new Date().toISOString(), event },
+      { id: newId("hist"), at: nowIso(), event },
       ...prev,
     ]);
   }, []);
@@ -268,21 +329,23 @@ export default function App() {
   const trashSong = useCallback(
     (id: string) => {
       patchSong(id, { trashed: true } as Partial<Song>);
-      const s = songs.find((x) => x.id === id);
-      if (s) addHistoryEvent(`Trashed "${s.title}"`);
+      setSongs((prev) => {
+        const s = prev.find((x) => x.id === id);
+        if (s) addHistoryEvent(`Trashed "${s.title}"`);
+        return prev;
+      });
     },
-    [patchSong, songs, addHistoryEvent]
+    [patchSong, addHistoryEvent]
   );
   const restoreSong = useCallback(
     (id: string) => {
       patchSong(id, { trashed: false } as Partial<Song>);
-      const s = songs.find((x) => x.id === id);
-      if (s) addHistoryEvent(`Restored "${s.title}"`);
     },
-    [patchSong, songs, addHistoryEvent]
+    [patchSong]
   );
   const deleteForever = useCallback((id: string) => {
     setSongs((prev) => prev.filter((s) => s.id !== id));
+    setQueue((q) => q.filter((x) => x !== id));
     api.deleteSong(id).catch(() => {});
   }, []);
   const emptyTrash = useCallback(() => {
@@ -292,24 +355,66 @@ export default function App() {
     });
   }, []);
 
-  /* player */
-  const playSong = useCallback(
-    (id: string, queueIds?: string[]) => {
-      setCurrentId(id);
-      setIsPlaying(true);
-      setQueue(queueIds && queueIds.length ? queueIds : [id]);
-      setSongs((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, playCount: s.playCount + 1 } : s))
-      );
+  const addWorkspace = useCallback(
+    async (name: string): Promise<Workspace> => {
+      try {
+        const res = await api.createWorkspace(name);
+        setWorkspaces((w) => [...w, res.workspace]);
+        setActiveWorkspaceId(res.workspace.id);
+        addHistoryEvent(`Created workspace "${name}"`);
+        return res.workspace;
+      } catch {
+        const ws: Workspace = {
+          id: newId("ws"),
+          name,
+          songIds: [],
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        setWorkspaces((w) => [...w, ws]);
+        setActiveWorkspaceId(ws.id);
+        return ws;
+      }
+    },
+    [setActiveWorkspaceId, addHistoryEvent]
+  );
+
+  const addVoice = useCallback(
+    async (v: { name: string; gender?: Voice["gender"]; description?: string }): Promise<Voice> => {
+      try {
+        const res = await api.createVoice(v);
+        setVoices((prev) => [...prev, res.voice]);
+        return res.voice;
+      } catch {
+        const voice: Voice = {
+          id: newId("voice"),
+          name: v.name,
+          gender: v.gender,
+          description: v.description,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        setVoices((prev) => [...prev, voice]);
+        return voice;
+      }
     },
     []
   );
+
+  /* player */
+  const playSong = useCallback((id: string, queueIds?: string[]) => {
+    setCurrentId(id);
+    setIsPlaying(true);
+    setQueue(queueIds && queueIds.length ? queueIds : [id]);
+    setSongs((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, playCount: s.playCount + 1 } : s))
+    );
+  }, []);
   const togglePlay = useCallback(() => setIsPlaying((p) => !p), []);
 
   const orderedQueue = useMemo(() => {
     if (!shuffle) return queue;
     const rest = queue.filter((q) => q !== currentId);
-    // simple stable shuffle keyed on queue content
     return [currentId, ...rest.slice().reverse()].filter(Boolean) as string[];
   }, [queue, shuffle, currentId]);
 
@@ -334,6 +439,22 @@ export default function App() {
   const playNext = useCallback(() => step(1), [step]);
   const playPrev = useCallback(() => step(-1), [step]);
 
+  const removeFromQueue = useCallback(
+    (id: string) => {
+      setQueue((q) => {
+        const remaining = q.filter((x) => x !== id);
+        if (currentId === id) {
+          const i = q.indexOf(id);
+          const next = remaining[Math.min(i, remaining.length - 1)] ?? null;
+          setCurrentId(next);
+          if (!next) setIsPlaying(false);
+        }
+        return remaining;
+      });
+    },
+    [currentId]
+  );
+
   /* generation */
   const generate = useCallback(
     async (payload: GeneratePayload): Promise<Song> => {
@@ -341,8 +462,6 @@ export default function App() {
         const res = await api.generate(payload);
         addSong(res.song);
         if (!res.ok) {
-          // Proxy reachable but ACE-Step rejected the task: the proxy
-          // already recorded a failed row, which we just added.
           addHistoryEvent(`Failed to submit task for "${res.song.title}"`);
           throw new Error(res.error || "ACE-Step task submission failed");
         }
@@ -350,13 +469,11 @@ export default function App() {
         addHistoryEvent(`Submitted ACE-Step task for "${res.song.title}"`);
         return res.song;
       } catch (e: any) {
-        if (e?.handled) throw e;
         if (e instanceof Error && /task submission failed/i.test(e.message)) {
           throw e; // failed row already added above
         }
-        // Proxy or ACE-Step unavailable: create a local mock row so the UI
-        // flow stays complete (DESIGN_DOC §27 "ACE-Step offline" state).
-        const now = new Date().toISOString();
+        // Proxy or ACE-Step unavailable: record a documented failed row.
+        const now = nowIso();
         const song: Song = {
           id: newId("local"),
           title: payload.title || "Untitled sketch",
@@ -395,10 +512,6 @@ export default function App() {
   );
 
   /* prefs persistence */
-  const setActiveWorkspaceId = useCallback((id: string) => {
-    setActiveWorkspaceIdRaw(id);
-    savePref("workspace", id);
-  }, []);
   const setSelectedPreset = useCallback((id: PresetId) => {
     setSelectedPresetRaw(id);
     savePref("preset", id);
@@ -407,22 +520,26 @@ export default function App() {
   useEffect(() => savePref("sidebarCollapsed", collapsed), [collapsed]);
 
   const currentSong = songs.find((s) => s.id === currentId) || null;
+  const defaultWorkspaceId = workspaces[0]?.id || "ws_default";
 
   const store: JunoStore = {
     route,
     navigate,
     songs,
     workspaces,
-    playlists: MOCK_PLAYLISTS,
-    voices: MOCK_VOICES,
-    stylePresets: MOCK_STYLE_PRESETS,
-    lyricDocs: MOCK_LYRICS,
-    hooks: MOCK_HOOKS,
-    coverArt: MOCK_COVER_ART,
-    projects: MOCK_PROJECTS,
+    playlists,
+    voices,
+    stylePresets,
+    lyricDocs,
+    hooks,
+    coverArt,
+    projects,
     history,
-    activeWorkspaceId,
+    activeWorkspaceId: activeWorkspaceId || defaultWorkspaceId,
     setActiveWorkspaceId,
+    defaultWorkspaceId,
+    addWorkspace,
+    addVoice,
     patchSong,
     addSong,
     trashSong,
@@ -437,6 +554,7 @@ export default function App() {
     playNext,
     playPrev,
     queue: orderedQueue,
+    removeFromQueue,
     shuffle,
     setShuffle,
     repeat,
