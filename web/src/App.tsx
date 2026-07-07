@@ -1,11 +1,7 @@
 /** Juno app shell: sidebar + routed page + persistent bottom player.
  *
- *  State model
- *  -----------
- *  CLEAN SLATE: mock data has been removed. The proxy database at
- *  /data/juno-db.json is the single source of truth; on boot the store is
- *  hydrated from /api/library and starts empty on a fresh install. A
- *  default "My Workspace" is created (and persisted) if none exists yet.
+ *  State model: the proxy database at /data/juno-db.json is the single
+ *  source of truth; on boot the store is hydrated from /api/library.
  *  Metadata mutations are optimistic in the UI and mirrored to the proxy
  *  best-effort so the app keeps working when ACE-Step is offline.
  */
@@ -57,13 +53,10 @@ export interface CreatePrefill {
   vocalGender?: "male" | "female" | "none";
   weirdness?: number;
   styleInfluence?: number;
-  /** "Use as Inspiration": reference audio + a visible label. */
   referenceAudioPath?: string;
   inspirationTitle?: string;
-  /** "Cover": source audio + label — Create submits task_type "cover". */
   srcAudioPath?: string;
   coverOfTitle?: string;
-  /** Voice attached from the Library ("Use in Create"). */
   voiceName?: string;
   sourceSongId?: string;
   taskType?: string;
@@ -87,9 +80,11 @@ interface JunoStore {
 
   activeWorkspaceId: string;
   setActiveWorkspaceId: (id: string) => void;
-  /** Fallback workspace for songs saved before workspaces existed. */
   defaultWorkspaceId: string;
   addWorkspace: (name: string) => Promise<Workspace>;
+  addPlaylist: (name: string) => Promise<Playlist>;
+  toggleSongInPlaylist: (songId: string, playlistId: string) => void;
+  addStylePreset: (name: string, styles: string[]) => Promise<StylePreset>;
   addVoice: (v: {
     name: string;
     gender?: Voice["gender"];
@@ -161,7 +156,6 @@ export default function App() {
   const [route, setRoute] = useState(currentRoute());
   const [collapsed, setCollapsed] = useState(loadPref("sidebarCollapsed", false));
 
-  /* Clean slate — everything is hydrated from the proxy DB. */
   const [songs, setSongs] = useState<Song[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -234,7 +228,6 @@ export default function App() {
         setCoverArt(lib?.coverArt || []);
         setHistory(lib?.history || []);
 
-        /* Resume polling for generations that were still running. */
         for (const t of lib?.tasks || []) {
           if (t.status === "queued" || t.status === "running") {
             pendingTaskIds.current.add(t.id);
@@ -259,7 +252,6 @@ export default function App() {
         );
       })
       .catch(() => {
-        /* proxy offline — start empty, with a session-only workspace */
         const ws = {
           id: "ws_default",
           name: "My Workspace",
@@ -379,6 +371,80 @@ export default function App() {
     [setActiveWorkspaceId, addHistoryEvent]
   );
 
+  /** Create a playlist (persisted to the proxy DB, local fallback). */
+  const addPlaylist = useCallback(
+    async (name: string): Promise<Playlist> => {
+      try {
+        const res = await api.createPlaylist(name);
+        setPlaylists((p) => [...p, res.playlist]);
+        addHistoryEvent(`Created playlist "${name}"`);
+        return res.playlist;
+      } catch {
+        const pl: Playlist = {
+          id: newId("pl"),
+          name,
+          songIds: [],
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        setPlaylists((p) => [...p, pl]);
+        return pl;
+      }
+    },
+    [addHistoryEvent]
+  );
+
+  /** Toggle a song's membership in a playlist. Updates both the song's
+   *  playlistIds and the playlist's songIds, mirroring to the proxy. */
+  const toggleSongInPlaylist = useCallback((songId: string, playlistId: string) => {
+    setSongs((prev) =>
+      prev.map((s) => {
+        if (s.id !== songId) return s;
+        const ids = s.playlistIds || [];
+        const next = ids.includes(playlistId)
+          ? ids.filter((x) => x !== playlistId)
+          : [...ids, playlistId];
+        api.patchSong(songId, { playlistIds: next }).catch(() => {});
+        return { ...s, playlistIds: next, updatedAt: nowIso() };
+      })
+    );
+    setPlaylists((prev) =>
+      prev.map((p) => {
+        if (p.id !== playlistId) return p;
+        const has = p.songIds.includes(songId);
+        const next = has
+          ? p.songIds.filter((x) => x !== songId)
+          : [...p.songIds, songId];
+        api.patchPlaylist(playlistId, { songIds: next }).catch(() => {});
+        return { ...p, songIds: next, updatedAt: nowIso() };
+      })
+    );
+  }, []);
+
+  /** Save the current style chips as a reusable preset (🗂 in Styles). */
+  const addStylePreset = useCallback(
+    async (name: string, styles: string[]): Promise<StylePreset> => {
+      try {
+        const res = await api.createStylePreset(name, styles);
+        setStylePresets((p) => [...p, res.style]);
+        addHistoryEvent(`Saved style preset "${name}"`);
+        return res.style;
+      } catch {
+        const sp: StylePreset = {
+          id: newId("style"),
+          name,
+          styles,
+          liked: false,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        };
+        setStylePresets((p) => [...p, sp]);
+        return sp;
+      }
+    },
+    [addHistoryEvent]
+  );
+
   const addVoice = useCallback(
     async (v: { name: string; gender?: Voice["gender"]; description?: string }): Promise<Voice> => {
       try {
@@ -470,9 +536,8 @@ export default function App() {
         return res.song;
       } catch (e: any) {
         if (e instanceof Error && /task submission failed/i.test(e.message)) {
-          throw e; // failed row already added above
+          throw e;
         }
-        // Proxy or ACE-Step unavailable: record a documented failed row.
         const now = nowIso();
         const song: Song = {
           id: newId("local"),
@@ -539,6 +604,9 @@ export default function App() {
     setActiveWorkspaceId,
     defaultWorkspaceId,
     addWorkspace,
+    addPlaylist,
+    toggleSongInPlaylist,
+    addStylePreset,
     addVoice,
     patchSong,
     addSong,

@@ -1,0 +1,26 @@
+/* ================================================================== */
+/* Juno fixes — append this file to web/src/styles/global.css          */
+/* (cat web/global-css-additions.css >> web/src/styles/global.css)    */
+/* ================================================================== */
+
+/* Studio: inspector action buttons were overflowing the 240px column. */
+.studio-inspector .btn {
+  width: 100%;
+  white-space: normal;
+  text-align: center;
+}
+
+/* Studio: prevent grid columns from forcing horizontal overflow. */
+.studio-grid {
+  min-width: 0;
+}
+.studio-timeline {
+  min-width: 0;
+}
+
+/* Studio: keep the empty-state readable above lane/region layers. */
+.studio-timeline .empty-state {
+  position: relative;
+  z-index: 1;
+  background: var(--color-bg-panel, #1c1c22);
+}

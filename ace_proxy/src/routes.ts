@@ -1,6 +1,7 @@
 /** Juno API routes. The React frontend calls ONLY these /api/* endpoints —
  *  never ACE-Step directly. See docs/API_MAPPING.md for the full table.
  */
+import { exec } from "child_process";
 import express, { Request, Response } from "express";
 import fs from "fs";
 import path from "path";
@@ -9,7 +10,7 @@ import { Readable } from "stream";
 import { aceClient } from "./aceClient";
 import { config } from "./config";
 import { addHistory, loadDb, mutateDb, purgeExpiredTrash } from "./storage";
-import { buildAcePayload, normalizeAceStatus, presetFor } from "./tasks";
+import { buildAcePayload, findAudioPath, normalizeAceStatus, presetFor } from "./tasks";
 import { GenerateRequest, GenerationTask, Song } from "./types";
 import { upload } from "./uploads";
 
@@ -96,6 +97,21 @@ router.post("/models/init", async (req: Request, res: Response) => {
       error: `Model initialization failed: ${e?.message || e}`,
     });
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* POST /api/models/unload — free VRAM by restarting the ACE-Step      */
+/* process via supervisord. Models lazy-load again on the next task.   */
+/* ------------------------------------------------------------------ */
+router.post("/models/unload", (_req: Request, res: Response) => {
+  exec("supervisorctl restart acestep", { timeout: 120000 }, (err, stdout, stderr) => {
+    if (err) {
+      res.status(500).json({ ok: false, error: (stderr || err.message || "").trim() });
+      return;
+    }
+    mutateDb((db) => addHistory(db, "Unloaded models (restarted ACE-Step)"));
+    res.json({ ok: true, detail: (stdout || "").trim() });
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -186,6 +202,8 @@ router.post("/generate", async (req: Request, res: Response) => {
 /* ------------------------------------------------------------------ */
 /* POST /api/tasks/query — poll ACE-Step and normalize status          */
 /* ------------------------------------------------------------------ */
+let lastRawLogAt = 0;
+
 router.post("/tasks/query", async (req: Request, res: Response) => {
   const ids: string[] = req.body?.taskIds || [];
   const db = loadDb();
@@ -258,6 +276,23 @@ router.post("/tasks/query", async (req: Request, res: Response) => {
     })
   );
 
+  // If anything is still not terminal, periodically dump the raw ACE-Step
+  // reply so a mismatched response shape is visible in `docker compose logs`.
+  if (
+    results.some((r) => r.status === "queued" || r.status === "running") &&
+    Date.now() - lastRawLogAt > 30000
+  ) {
+    lastRawLogAt = Date.now();
+    try {
+      console.log(
+        "[juno-proxy] ACE /query_result raw (truncated):",
+        JSON.stringify(aceRaw).slice(0, 1500)
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   res.json({ tasks: results });
 });
 
@@ -279,11 +314,10 @@ router.get("/audio", async (req: Request, res: Response) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* POST /api/upload — save audio into /uploads.                        */
-/* Accepts optional multipart text fields so locally processed audio   */
-/* (Reverse, Crop, Speed, Sample, Mashup…) becomes a real library row: */
-/*   title, type, description, sourceSongId, workspaceId,              */
-/*   durationSeconds, styles (JSON array), lyrics                      */
+/* POST /api/upload — save audio.                                      */
+/* Plain uploads land in /uploads; PROCESSED derivatives (Reverse,     */
+/* Crop, Speed, Sample, Mashup — anything with a type other than       */
+/* "upload") are moved into /outputs/library and served from there.    */
 /* ------------------------------------------------------------------ */
 router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   const file = (req as any).file as Express.Multer.File | undefined;
@@ -301,6 +335,28 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   } catch {
     /* ignore malformed styles */
   }
+
+  // Processed derivatives belong in the Library output dir, not /uploads.
+  let filePath = file.path;
+  let audioUrl = `/upload-audio/${path.basename(file.path)}`;
+  if (type !== "upload") {
+    try {
+      fs.mkdirSync(config.libraryDir, { recursive: true });
+      const dest = path.join(config.libraryDir, path.basename(file.path));
+      try {
+        fs.renameSync(file.path, dest);
+      } catch {
+        // /uploads and /outputs are separate bind mounts (EXDEV) — copy.
+        fs.copyFileSync(file.path, dest);
+        fs.unlinkSync(file.path);
+      }
+      filePath = dest;
+      audioUrl = `/library-audio/${path.basename(dest)}`;
+    } catch (e) {
+      console.error("[juno-proxy] failed to move processed audio to library:", e);
+    }
+  }
+
   const now = new Date().toISOString();
   const song: Song = {
     id: newId(type === "upload" ? "upl" : "song"),
@@ -324,8 +380,8 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
     createdAt: now,
     updatedAt: now,
     sourceSongId: b.sourceSongId || undefined,
-    localAudioPath: file.path,
-    audioUrl: `/upload-audio/${path.basename(file.path)}`,
+    localAudioPath: filePath,
+    audioUrl,
     generationStatus: "idle",
     metadata: { weirdness: 50, styleInfluence: 50, instrumental: false },
   };
@@ -342,8 +398,7 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* GET /api/library — everything the Library page needs                */
-/* (also enforces the 14-day trash TTL on every read)                  */
+/* GET /api/library                                                    */
 /* ------------------------------------------------------------------ */
 router.get("/library", (_req: Request, res: Response) => {
   const db = mutateDb((d) => {
@@ -382,6 +437,71 @@ router.post("/library/workspace", (req: Request, res: Response) => {
     return w;
   });
   res.json({ ok: true, workspace });
+});
+
+/* ------------------------------------------------------------------ */
+/* POST /api/library/playlist — create a playlist                      */
+/* PATCH /api/library/playlist/:id — rename / set songIds              */
+/* ------------------------------------------------------------------ */
+router.post("/library/playlist", (req: Request, res: Response) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) {
+    res.status(400).json({ error: "Missing playlist name" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const playlist = mutateDb((db) => {
+    const p = { id: newId("pl"), name, songIds: [] as string[], createdAt: now, updatedAt: now };
+    db.playlists.push(p);
+    addHistory(db, `Created playlist "${name}"`);
+    return p;
+  });
+  res.json({ ok: true, playlist });
+});
+
+router.patch("/library/playlist/:id", (req: Request, res: Response) => {
+  const updated = mutateDb((db) => {
+    const p = db.playlists.find((x) => x.id === req.params.id);
+    if (!p) return null;
+    if (typeof req.body?.name === "string" && req.body.name.trim()) {
+      p.name = req.body.name.trim();
+    }
+    if (Array.isArray(req.body?.songIds)) {
+      p.songIds = req.body.songIds.map(String);
+    }
+    if (typeof req.body?.coverArtUrl === "string") {
+      p.coverArtUrl = req.body.coverArtUrl;
+    }
+    p.updatedAt = new Date().toISOString();
+    return p;
+  });
+  if (!updated) {
+    res.status(404).json({ error: "Playlist not found" });
+    return;
+  }
+  res.json({ ok: true, playlist: updated });
+});
+
+/* ------------------------------------------------------------------ */
+/* POST /api/library/style — save a style preset (used by 🗂 in Styles)*/
+/* ------------------------------------------------------------------ */
+router.post("/library/style", (req: Request, res: Response) => {
+  const name = String(req.body?.name || "").trim();
+  const styles: string[] = Array.isArray(req.body?.styles)
+    ? req.body.styles.map(String).filter(Boolean)
+    : [];
+  if (!name || !styles.length) {
+    res.status(400).json({ error: "Missing preset name or styles" });
+    return;
+  }
+  const now = new Date().toISOString();
+  const style = mutateDb((db) => {
+    const s = { id: newId("style"), name, styles, liked: false, createdAt: now, updatedAt: now };
+    db.styles.push(s);
+    addHistory(db, `Saved style preset "${name}"`);
+    return s;
+  });
+  res.json({ ok: true, style });
 });
 
 /* ------------------------------------------------------------------ */
@@ -546,26 +666,43 @@ function generatedTitle(): string {
   return TITLES[Math.floor(Math.random() * TITLES.length)];
 }
 
-/** Pull the result object for one task id out of an ACE-Step batch reply. */
+/** Pull the result object for one task id out of an ACE-Step reply.
+ *  Handles: bare objects, arrays, {results: ...}, {tasks: ...},
+ *  {data: ...} envelopes (single or nested), and id-keyed maps. */
 function pickTaskResult(aceRaw: any, aceTaskId: string): any {
-  if (!aceRaw) return null;
-  if (Array.isArray(aceRaw)) {
-    return aceRaw.find((r) => String(r?.task_id ?? r?.id) === aceTaskId) ?? aceRaw[0];
-  }
-  if (aceRaw.results && typeof aceRaw.results === "object") {
-    if (Array.isArray(aceRaw.results)) {
-      return (
-        aceRaw.results.find((r: any) => String(r?.task_id ?? r?.id) === aceTaskId) ??
-        aceRaw.results[0]
-      );
+  let raw = aceRaw;
+  // Unwrap common {code, message, data} envelopes (possibly nested once).
+  for (let i = 0; i < 2; i++) {
+    if (
+      raw &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      raw.data != null &&
+      raw.status == null &&
+      raw.audio_path == null
+    ) {
+      raw = raw.data;
     }
-    return aceRaw.results[aceTaskId] ?? aceRaw;
   }
-  return aceRaw[aceTaskId] ?? aceRaw;
+  if (!raw) return aceRaw;
+
+  const idOf = (r: any) => String(r?.task_id ?? r?.id ?? r?.taskId ?? "");
+  const matchIn = (arr: any[]) => arr.find((r) => idOf(r) === aceTaskId);
+
+  if (Array.isArray(raw)) return matchIn(raw) ?? raw[0];
+  if (typeof raw === "object") {
+    if (raw[aceTaskId] != null) return raw[aceTaskId];
+    const res = raw.results ?? raw.tasks;
+    if (Array.isArray(res)) return matchIn(res) ?? res[0];
+    if (res && typeof res === "object") return res[aceTaskId] ?? raw;
+  }
+  return raw;
 }
 
 /** Download an ACE-Step audio path into /outputs/library and return the
- *  local absolute path. Existing copies are reused. */
+ *  local absolute path. Existing copies are reused. Handles absolute
+ *  container paths, paths RELATIVE to the ACE-Step working directory, and
+ *  falls back to fetching over HTTP via /v1/audio. */
 async function saveLocalCopy(acePath: string, songId?: string): Promise<string> {
   fs.mkdirSync(config.libraryDir, { recursive: true });
   const ext = path.extname(acePath) || ".wav";
@@ -573,15 +710,24 @@ async function saveLocalCopy(acePath: string, songId?: string): Promise<string> 
   const local = path.join(config.libraryDir, name);
   if (fs.existsSync(local) && fs.statSync(local).size > 0) return local;
 
-  if (fs.existsSync(acePath)) {
-    fs.copyFileSync(acePath, local);
-    return local;
+  const candidates = [acePath];
+  if (!path.isAbsolute(acePath)) {
+    candidates.push(path.join(config.aceWorkDir, acePath));
+  }
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      fs.copyFileSync(c, local);
+      return local;
+    }
   }
   const res = await aceClient.fetchAudio(acePath);
   if (!res.body) throw new Error("empty audio response");
   await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(local));
   return local;
 }
+
+// keep the findAudioPath export referenced so tree-shaking/lint stays quiet
+void findAudioPath;
 
 function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9-_]/g, "_").slice(0, 48);

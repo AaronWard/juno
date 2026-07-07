@@ -1,54 +1,54 @@
-services:
-  juno:
-    build: .
-    image: juno:latest
-    container_name: juno
-    ports:
-      - "3000:3000"
-      - "8001:8001"
-    volumes:
-      - ${JUNO_MODEL_DIR:-./models}:/models
-      - ${JUNO_OUTPUT_DIR:-./outputs}:/outputs
-      - ${JUNO_UPLOAD_DIR:-./uploads}:/uploads
-      - ${JUNO_DATA_DIR:-./data}:/data
-      - ${HF_HOME:-./hf-cache}:/root/.cache/huggingface
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+# services:
+#   juno:
+#     build: .
+#     image: juno:latest
+#     container_name: juno
+#     ports:
+#       - "3000:3000"
+#       - "8001:8001"
+#     volumes:
+#       - ${JUNO_MODEL_DIR:-./models}:/models
+#       - ${JUNO_OUTPUT_DIR:-./outputs}:/outputs
+#       - ${JUNO_UPLOAD_DIR:-./uploads}:/uploads
+#       - ${JUNO_DATA_DIR:-./data}:/data
+#       - ${HF_HOME:-./hf-cache}:/root/.cache/huggingface
+#     environment:
+#       NVIDIA_VISIBLE_DEVICES: all
+#       NVIDIA_DRIVER_CAPABILITIES: compute,utility
 
-      ACESTEP_API_HOST: 0.0.0.0
-      ACESTEP_API_PORT: 8001
+#       ACESTEP_API_HOST: 0.0.0.0
+#       ACESTEP_API_PORT: 8001
 
-      ACESTEP_CONFIG_PATH: /models/acestep-v15-xl-sft
-      ACESTEP_CONFIG_PATH2: /models/acestep-v15-xl-turbo
-      ACESTEP_CONFIG_PATH3: /models/acestep-v15-xl-base
+#       ACESTEP_CONFIG_PATH: /models/acestep-v15-xl-sft
+#       ACESTEP_CONFIG_PATH2: /models/acestep-v15-xl-turbo
+#       ACESTEP_CONFIG_PATH3: /models/acestep-v15-xl-base
 
-      ACESTEP_INIT_LLM: "true"
-      ACESTEP_LM_MODEL_PATH: /models/acestep-5Hz-lm-4B
-      ACESTEP_LM_BACKEND: vllm
+#       ACESTEP_INIT_LLM: "true"
+#       ACESTEP_LM_MODEL_PATH: /models/acestep-5Hz-lm-4B
+#       ACESTEP_LM_BACKEND: vllm
 
-      ACESTEP_DEVICE: auto
-      ACESTEP_USE_FLASH_ATTENTION: "true"
-      ACESTEP_OFFLOAD_TO_CPU: "false"
-      ACESTEP_OFFLOAD_DIT_TO_CPU: "false"
+#       ACESTEP_DEVICE: auto
+#       ACESTEP_USE_FLASH_ATTENTION: "true"
+#       ACESTEP_OFFLOAD_TO_CPU: "false"
+#       ACESTEP_OFFLOAD_DIT_TO_CPU: "false"
 
-      ACESTEP_TMPDIR: /outputs/tmp
-      TRITON_CACHE_DIR: /outputs/cache/triton
-      TORCHINDUCTOR_CACHE_DIR: /outputs/cache/torchinductor
+#       ACESTEP_TMPDIR: /outputs/tmp
+#       TRITON_CACHE_DIR: /outputs/cache/triton
+#       TORCHINDUCTOR_CACHE_DIR: /outputs/cache/torchinductor
 
-      JUNO_ACE_API_URL: http://127.0.0.1:8001
-      JUNO_OUTPUT_DIR: /outputs
-      JUNO_UPLOAD_DIR: /uploads
-      JUNO_DATA_DIR: /data
-      JUNO_MODEL_DIR: /models
-      JUNO_WEB_PORT: 3000
+#       JUNO_ACE_API_URL: http://127.0.0.1:8001
+#       JUNO_OUTPUT_DIR: /outputs
+#       JUNO_UPLOAD_DIR: /uploads
+#       JUNO_DATA_DIR: /data
+#       JUNO_MODEL_DIR: /models
+#       JUNO_WEB_PORT: 3000
 
-      HF_TOKEN: ${HF_TOKEN:-}
-      JUNO_SKIP_MODELS: ${JUNO_SKIP_MODELS:-false}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+#       HF_TOKEN: ${HF_TOKEN:-}
+#       JUNO_SKIP_MODELS: ${JUNO_SKIP_MODELS:-false}
+#     deploy:
+#       resources:
+#         reservations:
+#           devices:
+#             - driver: nvidia
+#               count: all
+#               capabilities: [gpu]

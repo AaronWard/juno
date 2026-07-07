@@ -5,7 +5,7 @@
  *  the frontend standalone in dev), callers fall back to local behavior.
  */
 import { Song } from "../data/mockSongs";
-import { Voice, Workspace } from "../data/mockLibrary";
+import { Playlist, StylePreset, Voice, Workspace } from "../data/mockLibrary";
 
 export interface HealthResponse {
   juno: string;
@@ -91,6 +91,14 @@ export const api = {
       body: JSON.stringify({ model }),
     }),
 
+  /** Restart the ACE-Step process to free all GPU VRAM. Models lazy-load
+   *  again on the next generation or explicit Initialize. */
+  unloadModels: () =>
+    json<{ ok: boolean; detail?: string; error?: string }>(
+      "/api/models/unload",
+      { method: "POST" }
+    ),
+
   /** Submit a generation task. When ACE-Step rejects the task the proxy
    *  still records a failed Song row and returns it with ok:false. Only a
    *  transport failure (proxy unreachable) throws without a song. */
@@ -139,6 +147,27 @@ export const api = {
     json<{ ok: boolean; workspace: Workspace }>("/api/library/workspace", {
       method: "POST",
       body: JSON.stringify({ name }),
+    }),
+
+  createPlaylist: (name: string) =>
+    json<{ ok: boolean; playlist: Playlist }>("/api/library/playlist", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  patchPlaylist: (
+    id: string,
+    patch: { name?: string; songIds?: string[]; coverArtUrl?: string }
+  ) =>
+    json<{ ok: boolean; playlist: Playlist }>(`/api/library/playlist/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+
+  createStylePreset: (name: string, styles: string[]) =>
+    json<{ ok: boolean; style: StylePreset }>("/api/library/style", {
+      method: "POST",
+      body: JSON.stringify({ name, styles }),
     }),
 
   createVoice: (voice: {
