@@ -19,21 +19,26 @@ export function presetFor(model?: string) {
 /** ACE-Step rejects absolute audio paths ("absolute audio file paths are
  *  not allowed"). Absolute container paths (e.g. /uploads/x.mp3 or
  *  /outputs/library/x.wav) are symlinked into <aceWorkDir>/juno_audio/ and
- *  passed RELATIVE to the ACE-Step working directory instead. */
+ *  passed RELATIVE to the ACE-Step working directory instead.
+ */
 export function toAceRelativeAudioPath(absPath?: string): string | undefined {
   if (!absPath) return undefined;
   if (!path.isAbsolute(absPath)) return absPath; // already relative
+
   const linkDir = path.join(config.aceWorkDir, "juno_audio");
   fs.mkdirSync(linkDir, { recursive: true });
+
   const safe = path.basename(absPath).replace(/[^\w.\- ]/g, "_");
   const name = `${Date.now().toString(36)}_${safe}`;
   const link = path.join(linkDir, name);
+
   try {
     fs.symlinkSync(absPath, link);
   } catch {
-    // symlink can fail on odd filesystems — fall back to a copy
+    // Symlink can fail on odd filesystems or cross-mount setups — fall back to a copy.
     fs.copyFileSync(absPath, link);
   }
+
   return path.posix.join("juno_audio", name);
 }
 
@@ -44,11 +49,12 @@ export function buildAcePayload(req: GenerateRequest): Record<string, unknown> {
 
   const styleText = (req.styles || []).join(", ");
   const promptParts = [req.prompt, styleText].filter(Boolean);
+
   if (req.exclude) {
     promptParts.push(`avoid: ${req.exclude}`);
   }
-  const prompt = promptParts.join(", ");
 
+  const prompt = promptParts.join(", ");
   const lyrics = req.instrumental ? "" : req.lyrics || "";
 
   // Weirdness is LOCAL metadata + seed variation.
@@ -61,43 +67,72 @@ export function buildAcePayload(req: GenerateRequest): Record<string, unknown> {
     prompt,
     lyrics,
     audio_duration: req.duration ?? 120,
+
+    // Keep this explicit. SFT/Base should not accidentally inherit Turbo-ish
+    // low-step API defaults.
     inference_steps: preset.inferenceSteps,
+
+    // Explicit DiT scheduler controls. Important for SFT/Base stability, and
+    // safe for Turbo too.
+    shift: preset.shift,
+    infer_method: preset.inferMethod,
+
     // Juno keeps exactly one row per generation — ask for ONE take instead
-    // of ACE-Step's default batch of 2 (which doubled GPU time and left a
-    // second unused mp3 in /outputs/tmp/api_audio).
+    // of ACE-Step's default batch of 2.
     batch_size: 1,
+
     thinking: config.lmThinking && THINKING_TASKS.includes(taskType),
     seed: useRandomSeed ? -1 : req.seed,
     use_random_seed: useRandomSeed,
   };
 
   // Only pin the vocal language when the user actually chose one. Forcing
-  // "en" onto Spanish/Vietnamese lyrics confuses the LM metadata pass
-  // (your logs showed `language: unknown` + a rewritten caption).
-  if (req.vocalLanguage) payload.vocal_language = req.vocalLanguage;
-
-  // Style Influence -> guidance_scale (1.0–15.0), but ONLY when the slider
-  // deviates from the default 50. At the default we omit the field so
-  // ACE-Step uses its own tuned guidance for the loaded pipeline — a forced
-  // value on the llm_dit path is a prime suspect for degraded output.
-  const si = req.styleInfluence;
-  if (preset.cfgEnabled && si != null && si !== 50) {
-    payload.guidance_scale = round1(1 + (clamp(si, 0, 100) / 100) * 14);
+  // "en" onto non-English lyrics confuses the LM metadata pass.
+  if (req.vocalLanguage) {
+    payload.vocal_language = req.vocalLanguage;
   }
 
-  if (req.bpm != null) payload.bpm = req.bpm;
-  if (req.key) payload.key_scale = req.key;
-  if (req.timeSignature) payload.time_signature = req.timeSignature;
+  // Style Influence -> ACE CFG guidance.
+  //
+  // Do NOT use the raw API's full 1.0–15.0 range for Juno's user-facing slider.
+  // For SFT/Base, keep guidance in the stable 5.0–9.0 band configured on the
+  // preset. At default Style Influence 50, this sends guidance_scale=7.0
+  // explicitly instead of relying on API defaults.
+  if (preset.cfgEnabled) {
+    payload.guidance_scale = guidanceForStyleInfluence(req.styleInfluence, preset);
+    payload.cfg_interval_start = preset.cfgIntervalStart;
+    payload.cfg_interval_end = preset.cfgIntervalEnd;
+    payload.use_adg = preset.useAdg;
+  }
+
+  if (req.bpm != null) {
+    payload.bpm = req.bpm;
+  }
+
+  if (req.key) {
+    payload.key_scale = req.key;
+  }
+
+  if (req.timeSignature) {
+    payload.time_signature = req.timeSignature;
+  }
 
   const src = toAceRelativeAudioPath(req.srcAudioPath);
   const ref = toAceRelativeAudioPath(req.referenceAudioPath);
-  if (src) payload.src_audio_path = src;
-  if (ref) payload.reference_audio_path = ref;
+
+  if (src) {
+    payload.src_audio_path = src;
+  }
+
+  if (ref) {
+    payload.reference_audio_path = ref;
+  }
 
   if (taskType === "repaint") {
     payload.repainting_start = req.repaintStart ?? 0;
     payload.repainting_end = req.repaintEnd ?? (req.duration ?? 30);
   }
+
   return payload;
 }
 
@@ -105,8 +140,36 @@ export function buildAcePayload(req: GenerateRequest): Record<string, unknown> {
 /* Defensive parsing of ACE-Step /query_result responses               */
 /* ------------------------------------------------------------------ */
 
+/** ACE-Step's /query_result "file" field is often a ready-made download URL
+ *  like "/v1/audio?path=%2Foutputs%2Ftmp%2F...mp3", sometimes nested/encoded.
+ *  Unwrap it to the raw container file path; otherwise the proxy can build
+ *  /v1/audio?path=/v1/audio?path=... and ACE-Step rejects the download.
+ */
+export function unwrapAudioUrl(p: string): string {
+  let cur = p;
+
+  for (let i = 0; i < 4; i++) {
+    const m = cur.match(/[?&]path=([^&#]+)/);
+    if (!m) break;
+
+    let inner = m[1];
+
+    try {
+      inner = decodeURIComponent(inner);
+    } catch {
+      // Keep as-is if decoding fails.
+    }
+
+    if (inner === cur) break;
+    cur = inner;
+  }
+
+  return cur;
+}
+
 const AUDIO_PATH_RE = /\.(mp3|wav|flac|ogg|m4a|opus)([?#].*)?$/i;
-/** Keys that echo OUR inputs back — never treat these as results. */
+
+/** Keys that echo OUR inputs back — never treat these as generated results. */
 const SKIP_KEYS =
   /^(src_audio_path|reference_audio_path|ref_audio_path|input|inputs|request|request_payload|payload|params|prompt|lyrics)$/i;
 
@@ -119,90 +182,132 @@ function maybeJson(s: string): any {
 }
 
 /** Recursively find a generated audio file path anywhere in the reply,
- *  including inside `result` fields that are JSON-encoded strings. */
+ *  including inside `result` fields that are JSON-encoded strings.
+ */
 export function findAudioPath(obj: any, depth = 0): string | undefined {
   if (obj == null || depth > 7) return undefined;
+
   if (typeof obj === "string") {
-    if (AUDIO_PATH_RE.test(obj)) return obj;
+    if (AUDIO_PATH_RE.test(obj)) {
+      return obj;
+    }
+
     const t = obj.trim();
+
     if ((t.startsWith("{") || t.startsWith("[")) && t.length < 200000) {
       const parsed = maybeJson(t);
-      if (parsed !== undefined) return findAudioPath(parsed, depth + 1);
+      if (parsed !== undefined) {
+        return findAudioPath(parsed, depth + 1);
+      }
     }
+
     return undefined;
   }
+
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const r = findAudioPath(v, depth + 1);
       if (r) return r;
     }
+
     return undefined;
   }
+
   if (typeof obj === "object") {
     for (const k of ["audio_path", "audio_file", "path", "file", "audio_url", "url"]) {
       const v = (obj as any)[k];
-      if (typeof v === "string" && AUDIO_PATH_RE.test(v)) return v;
+
+      if (typeof v === "string" && AUDIO_PATH_RE.test(v)) {
+        return v;
+      }
     }
+
     for (const [k, v] of Object.entries(obj)) {
       if (SKIP_KEYS.test(k)) continue;
+
       const r = findAudioPath(v, depth + 1);
       if (r) return r;
     }
   }
+
   return undefined;
 }
 
 function findStatus(obj: any, depth = 0): string | undefined {
   if (obj == null || depth > 6) return undefined;
+
   if (typeof obj === "string") {
     const t = obj.trim();
+
     if ((t.startsWith("{") || t.startsWith("[")) && t.length < 200000) {
       return findStatus(maybeJson(t), depth + 1);
     }
+
     return undefined;
   }
+
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const r = findStatus(v, depth + 1);
       if (r) return r;
     }
+
     return undefined;
   }
+
   if (typeof obj === "object") {
     for (const k of ["status", "state", "task_status"]) {
       const v = (obj as any)[k];
-      if (typeof v === "string" && v) return v;
-      if (typeof v === "number") return String(v);
+
+      if (typeof v === "string" && v) {
+        return v;
+      }
+
+      if (typeof v === "number") {
+        return String(v);
+      }
     }
+
     for (const [k, v] of Object.entries(obj)) {
       if (SKIP_KEYS.test(k)) continue;
+
       const r = findStatus(v, depth + 1);
       if (r) return r;
     }
   }
+
   return undefined;
 }
 
 function findError(obj: any, depth = 0): string | undefined {
   if (obj == null || depth > 6) return undefined;
+
   if (Array.isArray(obj)) {
     for (const v of obj) {
       const r = findError(v, depth + 1);
       if (r) return r;
     }
+
     return undefined;
   }
+
   if (typeof obj === "object") {
     for (const k of ["error", "err_msg", "error_msg", "failure", "exception", "traceback"]) {
       const v = (obj as any)[k];
-      if (typeof v === "string" && v && !/^(ok|success|none|null)$/i.test(v)) return v;
+
+      if (typeof v === "string" && v && !/^(ok|success|none|null)$/i.test(v)) {
+        return v;
+      }
     }
+
     for (const [k, v] of Object.entries(obj)) {
       if (SKIP_KEYS.test(k)) continue;
+
       const r = findError(v, depth + 1);
       if (r) return r;
     }
   }
+
   return undefined;
 }
 
@@ -215,7 +320,7 @@ const QUEUED_WORDS = ["queued", "waiting", "created", "submitted"];
  *  Rules, in priority order:
  *   1. A generated audio path anywhere in the reply  -> succeeded
  *   2. A failure-ish status or a real error string    -> failed
- *   3. A success-ish status but no path yet           -> running (retry)
+ *   3. A success-ish status but no path yet           -> running, retry
  *   4. Anything running/numeric                       -> running
  *   5. Otherwise                                      -> queued
  */
@@ -225,27 +330,56 @@ export function normalizeAceStatus(raw: any): {
   error?: string;
 } {
   const audioPath = findAudioPath(raw);
-  if (audioPath) return { status: "succeeded", audioPath };
+
+  if (audioPath) {
+    return {
+      status: "succeeded",
+      audioPath: unwrapAudioUrl(audioPath),
+    };
+  }
 
   const err = findError(raw);
   const s = (findStatus(raw) || "").toLowerCase();
 
   if (FAILED_WORDS.includes(s) || (err && !SUCCESS_WORDS.includes(s))) {
-    return { status: "failed", error: err || "ACE-Step task failed" };
+    return {
+      status: "failed",
+      error: err || "ACE-Step task failed",
+    };
   }
+
   if (SUCCESS_WORDS.includes(s)) {
-    // Completed but no audio path visible in this reply — keep polling
-    // instead of recording a path-less success.
+    // Completed but no audio path visible in this reply — keep polling instead
+    // of recording a path-less success.
     return { status: "running" };
   }
-  if (QUEUED_WORDS.includes(s)) return { status: "queued" };
-  if (RUNNING_WORDS.includes(s) || /^\d+$/.test(s)) return { status: "running" };
+
+  if (QUEUED_WORDS.includes(s)) {
+    return { status: "queued" };
+  }
+
+  if (RUNNING_WORDS.includes(s) || /^\d+$/.test(s)) {
+    return { status: "running" };
+  }
+
   return { status: "queued" };
+}
+
+function guidanceForStyleInfluence(
+  styleInfluence: number | undefined,
+  preset: ReturnType<typeof presetFor>
+): number {
+  const si = clamp(styleInfluence ?? 50, 0, 100);
+
+  return round1(
+    preset.guidanceMin + (si / 100) * (preset.guidanceMax - preset.guidanceMin)
+  );
 }
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
+
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }

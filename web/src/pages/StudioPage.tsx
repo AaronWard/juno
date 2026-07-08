@@ -250,11 +250,13 @@ export function StudioPage() {
               <span key={i} style={{ left: i * 8 * PX_PER_SEC }}>{fmtDuration(i * 8)}</span>
             ))}
           </div>
-          <div
-            className="timeline-region"
-            style={{ left: region.start * PX_PER_SEC, width: (region.end - region.start) * PX_PER_SEC }}
-            aria-hidden="true"
-          />
+          {clips.length > 0 && (
+            <div
+              className="timeline-region"
+              style={{ left: region.start * PX_PER_SEC, width: (region.end - region.start) * PX_PER_SEC }}
+              aria-hidden="true"
+            />
+          )}
           {clips.length === 0 && (
             <div className="empty-state" style={{ margin: "26px 8px 8px" }}>
               <h3>Empty arrangement</h3>

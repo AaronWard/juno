@@ -24,6 +24,8 @@ EXPECTED = [
     "acestep-v15-xl-turbo",
     "acestep-v15-xl-base",
     "acestep-5Hz-lm-4B",
+    "vae",
+    "Qwen3-Embedding-0.6B",
 ]
 
 WEIGHT_EXTS = (".safetensors", ".bin", ".pt", ".gguf")

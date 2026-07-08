@@ -10,7 +10,7 @@ import { Readable } from "stream";
 import { aceClient } from "./aceClient";
 import { config } from "./config";
 import { addHistory, loadDb, mutateDb, purgeExpiredTrash } from "./storage";
-import { buildAcePayload, findAudioPath, normalizeAceStatus, presetFor } from "./tasks";
+import { buildAcePayload, findAudioPath, normalizeAceStatus, presetFor, unwrapAudioUrl } from "./tasks";
 import { GenerateRequest, GenerationTask, Song } from "./types";
 import { upload } from "./uploads";
 
@@ -86,7 +86,7 @@ router.post("/models/init", async (req: Request, res: Response) => {
       config_path: preset.ditPath,
       init_llm: true,
       lm_model_path: preset.lmPath,
-      lm_backend: "vllm",
+      lm_backend: config.lmBackend,
     });
     mutateDb((db) => addHistory(db, `Initialized model ${preset.label}`));
     res.json({ ok: true, preset: preset.id, aceModel: preset.aceModel, result });
@@ -704,6 +704,7 @@ function pickTaskResult(aceRaw: any, aceTaskId: string): any {
  *  container paths, paths RELATIVE to the ACE-Step working directory, and
  *  falls back to fetching over HTTP via /v1/audio. */
 async function saveLocalCopy(acePath: string, songId?: string): Promise<string> {
+  acePath = unwrapAudioUrl(acePath);
   fs.mkdirSync(config.libraryDir, { recursive: true });
   const ext = path.extname(acePath) || ".wav";
   const name = `${songId || "audio"}_${sanitize(path.basename(acePath, ext))}${ext}`;

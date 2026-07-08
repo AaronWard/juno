@@ -9,6 +9,7 @@ import { LibraryTabs, LibraryTab } from "../components/LibraryTabs";
 import { Toolbar } from "../components/Toolbar";
 import { SongRow } from "../components/SongRow";
 import { UploadModal } from "../components/UploadModal";
+import { PlaylistsPanel } from "../components/PlaylistsPanel";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 import { coverGradient } from "../lib/audio";
@@ -158,7 +159,7 @@ export function LibraryPage() {
             SONG_SORTS,
             songRows.length
           )}
-          <div className="song-list">
+          <div className={view === "Compact" ? "song-list compact" : "song-list"}>
             {songRows.length === 0 && (
               <EmptyTab
                 title={q || filters.length ? "No songs match" : "No songs yet"}
@@ -184,25 +185,7 @@ export function LibraryPage() {
       {tab === "Playlists" && (
         <>
           {commonToolbar([], NAME_SORTS, playlists.length)}
-          <div className="card-grid">
-            {playlists.length === 0 && (
-              <EmptyTab title="No playlists yet" hint="Playlists you save will appear here." />
-            )}
-            {playlists
-              .filter((p) => matches(p.name))
-              .map((p) => (
-                <div key={p.id} className="asset-card">
-                  <div
-                    className="asset-thumb"
-                    style={{ background: coverGradient(p.id) }}
-                    aria-hidden="true"
-                  />
-                  <strong>{p.name}</strong>
-                  <span className="inline-hint">{p.songIds.length} songs</span>
-                  <Button onClick={() => navigate("/create")}>Open</Button>
-                </div>
-              ))}
-          </div>
+          <PlaylistsPanel />
         </>
       )}
 

@@ -4,6 +4,7 @@ import { MODEL_PRESETS } from "../data/modelPresets";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { ModelStatus } from "../components/ModelStatus";
+import { UnloadModelsButton } from "../components/UnloadModelsButton";
 
 const PATHS: [string, string][] = [
   ["Model weights", "./models (host) → /models (container)"],
@@ -49,6 +50,7 @@ export function SettingsPage() {
           either stays unavailable.
         </p>
         <ModelStatus />
+        <UnloadModelsButton />
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>

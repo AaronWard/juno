@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Button } from "./Button";
 import { Dropdown } from "./Dropdown";
+import { SavedStylesMenu } from "./SavedStylesMenu";
 import { useJuno } from "../App";
 
 const SUGGESTIONS = [
@@ -79,17 +80,7 @@ export function StylesCard({ chips, onChips }: Props) {
             aria-label="Style descriptors (comma separated)"
           />
           <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 6 }}>
-            <Dropdown
-              align="left"
-              triggerClass="btn btn-icon"
-              ariaLabel="Saved style presets"
-              trigger={<>🗂</>}
-              items={stylePresets.map((p) => ({
-                id: p.id,
-                label: p.name,
-                onSelect: () => onChips([...new Set([...chips, ...p.styles])]),
-              }))}
-            />
+            <SavedStylesMenu chips={chips} onChips={onChips} />
             <Button variant="icon" label="Expand styles locally" onClick={expand}>✨</Button>
             <Button variant="icon" label="Suggest random styles" onClick={randomize}>↻</Button>
             <div className="chip-row" style={{ flex: 1 }}>

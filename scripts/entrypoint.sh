@@ -44,7 +44,7 @@ mkdir -p "${DATA_DIR}"
 #     checkpoint-relative name instead of absolute path).
 CKPT_DIR="/app/ACE-Step-1.5/checkpoints"
 mkdir -p "${CKPT_DIR}"
-for m in acestep-v15-xl-sft acestep-v15-xl-turbo acestep-v15-xl-base acestep-5Hz-lm-4B; do
+for m in acestep-v15-xl-sft acestep-v15-xl-turbo acestep-v15-xl-base acestep-5Hz-lm-4B vae Qwen3-Embedding-0.6B; do
   if [ -d "${MODEL_DIR}/${m}" ] && [ ! -e "${CKPT_DIR}/${m}" ]; then
     ln -s "${MODEL_DIR}/${m}" "${CKPT_DIR}/${m}"
     echo "[entrypoint] symlinked ${CKPT_DIR}/${m} -> ${MODEL_DIR}/${m}"

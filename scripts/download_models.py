@@ -29,6 +29,13 @@ MODELS = [
     ("ACE-Step/acestep-5Hz-lm-4B", "acestep-5Hz-lm-4B"),
 ]
 
+# Shared components from the unified repo, stored on the persistent /models
+# mount. Without these, ACE-Step downloads them into the container's
+# EPHEMERAL /app/ACE-Step-1.5/checkpoints on first generation after every
+# image rebuild (vae + Qwen3 text-embedding, ~1.6 GB).
+UNIFIED_REPO = "ACE-Step/Ace-Step1.5"
+COMPONENTS = ["vae", "Qwen3-Embedding-0.6B"]
+
 MODEL_ROOT = os.environ.get("JUNO_MODEL_DIR", "/models")
 
 WEIGHT_EXTS = (".safetensors", ".bin", ".pt", ".gguf")
@@ -132,6 +139,39 @@ def main() -> int:
             failures.append(repo_id)
         else:
             print(f"[ok] {repo_id} ready at {target} ({detail})")
+
+    # ------------------------------------------------------------------
+    # Shared components (vae, Qwen3-Embedding-0.6B) from the unified repo.
+    # ------------------------------------------------------------------
+    missing_components = []
+    for comp in COMPONENTS:
+        target = os.path.join(MODEL_ROOT, comp)
+        complete, detail = model_state(target)
+        if complete:
+            print(f"[skip] {UNIFIED_REPO}:{comp} — complete at {target} ({detail})")
+        else:
+            missing_components.append(comp)
+    if missing_components:
+        print(f"[download] {UNIFIED_REPO} components {missing_components} -> {MODEL_ROOT}")
+        try:
+            snapshot_download(
+                repo_id=UNIFIED_REPO,
+                local_dir=MODEL_ROOT,
+                token=token,
+                max_workers=8,
+                allow_patterns=[f"{c}/*" for c in missing_components],
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[error] failed to download unified-repo components: {exc}", file=sys.stderr)
+            failures.append(f"{UNIFIED_REPO} ({', '.join(missing_components)})")
+        else:
+            for comp in missing_components:
+                complete, detail = model_state(os.path.join(MODEL_ROOT, comp))
+                if complete:
+                    print(f"[ok] {comp} ready ({detail})")
+                else:
+                    print(f"[error] component {comp} still incomplete ({detail})", file=sys.stderr)
+                    failures.append(comp)
 
     if failures:
         print(f"\nFAILED to download: {', '.join(failures)}", file=sys.stderr)

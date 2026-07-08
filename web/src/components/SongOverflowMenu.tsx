@@ -26,6 +26,7 @@ import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { Slider } from "./Slider";
+import { PlaylistMenuSection } from "./PlaylistMenuSection";
 import { api } from "../lib/api";
 import {
   bufferToFile,
@@ -317,6 +318,7 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         >
           Reuse Prompt
         </button>
+        <PlaylistMenuSection song={song} />
         <div className="menu-divider" />
         <button className="menu-item" disabled={!hasAudio} onClick={() => setModal("crop")}>
           Crop{disabledHint}
