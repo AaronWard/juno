@@ -65,7 +65,7 @@ export const config = {
       guidanceMax: 9.0,
       shift: 3.0,
       inferMethod: "ode",
-      useAdg: false,
+      useAdg: true,
       cfgIntervalStart: 0.0,
       cfgIntervalEnd: 1.0,
 
@@ -104,7 +104,7 @@ export const config = {
       slot: 1,
 
       // Base benefits from more steps than SFT/Turbo.
-      inferenceSteps: 64,
+      inferenceSteps: 50,
 
       cfgEnabled: true,
       guidanceScale: 7.0,
@@ -115,7 +115,7 @@ export const config = {
 
       // Leave ADG off while debugging the gibberish/noise path.
       // ACE docs say ADG is base-only, but this makes Studio less risky first.
-      useAdg: false,
+      useAdg: true,
 
       cfgIntervalStart: 0.0,
       cfgIntervalEnd: 1.0,
