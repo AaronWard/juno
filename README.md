@@ -5,6 +5,11 @@ powered locally by **ACE-Step 1.5 XL** models. One Docker image runs the
 ACE-Step API server and the Juno web app; everything — model weights,
 generated audio, uploads, and your library — stays on your machine.
 
+<p align="center">
+  <img src="./preview.png" alt="Sacra Stella" width="1000">
+</p>
+
+
 ## What Juno Includes
 
 - **Create** — prompt + lyrics (Write / Prompt / Instrumental) + style chips
