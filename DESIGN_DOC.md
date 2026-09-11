@@ -522,3 +522,28 @@ them before the first real generation):
   Slow Bloom, Neon Prayer.
 - Forbidden copy anywhere in the UI: Upgrade, Pro, credits, plans,
   billing, Explore, Earn Credits, Labs, Terms & Policies, notifications.
+
+## 29. MIDI (`/midi`, `/midi/:id`)
+
+- Left: transcriptions (from ⋯ → Extract MIDI or uploaded here), each with
+  source, model size, note count, live progress, Retry on failure.
+- Right: title (click to rename), badges (model, BPM, notes, Edited /
+  Unsaved), Save edits, More (download .mid / quantized .mid, render to WAV →
+  Library, revert, open source song, delete).
+- Transport: play/pause (Space), back to start, seek, synth volume, optional
+  "Original" A/B layer at its own volume, Play | Edit view switch.
+- Track strip: colour, name, note count, M / S / visibility; clicking a name
+  makes it the active (editable) track; ＋ Track adds an empty one.
+- Play view: vertical falling-notes piano, keys light in track colours.
+- Edit view: horizontal piano roll with ruler, velocity lane, Select/Draw
+  tools, tempo-aware snap, undo/redo, shortcuts (ⓘ).
+- Song rows show a 🎹 link (with % while running) once a transcription exists.
+- Edits are saved beside the original; Revert restores it.
+
+## 30. Engine status
+
+A live status card (Create panel, Settings) and a one-line version in the
+sidebar show: offline / starting / idle / loading X (elapsed) / X ready /
+generating (n waiting) / unloading, plus VRAM and the auto-unload time.
+Actions: Load <selected preset>, Unload (confirmation if it would cancel a
+running job). There is no manual "Initialize model" step.

@@ -1,6 +1,7 @@
 import React from "react";
 import { useJuno } from "../App";
 import { Dropdown } from "./Dropdown";
+import { ModelStatus } from "./ModelStatus";
 
 /** Offline Juno sidebar. Intentionally excludes: Upgrade to Pro, Home,
  *  Explore, Notifications, Earn Credits, Labs, Terms & Policies. */
@@ -17,6 +18,7 @@ export function Sidebar({
     { icon: "✚", label: "Create", route: "/create" },
     { icon: "▦", label: "Studio", route: "/studio" },
     { icon: "♫", label: "Library", route: "/library" },
+    { icon: "♩", label: "MIDI", route: "/midi" },
   ];
 
   const isActive = (r: string) =>
@@ -67,7 +69,9 @@ export function Sidebar({
         ))}
       </div>
 
-      <div className="sidebar-nav" style={{ marginTop: "auto" }}>
+      <div style={{ marginTop: "auto" }}>{!collapsed && <ModelStatus compact />}</div>
+
+      <div className="sidebar-nav">
         <Dropdown
           align="left"
           triggerClass={`nav-item${route.startsWith("/settings") || route.startsWith("/trash") ? " active" : ""}`}

@@ -2,11 +2,12 @@
 
 How Juno talks to the local ACE-Step 1.5 runtime.
 
-1. **Topology.** One container, two processes under supervisord: the
+1. **Topology.** One container, three processes under supervisord: the
    ACE-Step API server (`uv run acestep-api`, port **8001**) and the Juno
    web/proxy server (Node/Express, port **3000**). The browser only ever
    calls `/api/*` on port 3000; the proxy (`ace_proxy/src/aceClient.ts`)
-   forwards to `http://127.0.0.1:8001`.
+   forwards to `http://127.0.0.1:8001`. The third process, MuScriptor
+   (`127.0.0.1:8002`, audio→MIDI), is started and stopped on demand.
 
 2. **Runtime install.** The Dockerfile clones
    `https://github.com/ace-step/ACE-Step-1.5.git` into `/app/ACE-Step-1.5`
@@ -20,19 +21,18 @@ How Juno talks to the local ACE-Step 1.5 runtime.
    `/app/ACE-Step-1.5/checkpoints/<name>` so the runtime finds them under
    its conventional checkpoint root.
 
-4. **Configuration.** ACE-Step is configured via environment
-   (`docker-compose.yml`): `ACESTEP_CONFIG_PATH`, `ACESTEP_CONFIG_PATH2`,
-   `ACESTEP_CONFIG_PATH3` point at the three DiT models (slots 1/2/3);
-   `ACESTEP_INIT_LLM=true`, `ACESTEP_LM_MODEL_PATH=/models/acestep-5Hz-lm-4B`,
-   `ACESTEP_LM_BACKEND=vllm`; device/attention/offload flags are tuned for
-   a single 32 GB GPU (no CPU offload).
+4. **Configuration.** ACE-Step is configured via environment, sanitized by the
+   supervisord launcher: `ACESTEP_CONFIG_PATH` is reduced to a bare model
+   name (the startup default), `ACESTEP_CONFIG_PATH2/3` are unset, and
+   `ACESTEP_LM_BACKEND` is forced to `JUNO_LM_BACKEND` (default `pt`).
+   Models are lazy — nothing is in VRAM until the first job or Load.
 
-5. **Presets.** Juno exposes exactly three presets, mapped to those slots:
-   Juno XL Quality → sft (slot 1, 50 steps, CFG on), Juno XL Fast → turbo
-   (slot 2, 8 steps, CFG off), Juno XL Studio → base (slot 3, 50 steps,
-   CFG on). All use the 4B LM. `POST /api/models/init {model}` triggers
-   initialization of the corresponding slot and can take minutes on first
-   load (10-minute client timeout).
+5. **Presets & model management.** Juno exposes three presets on ONE slot:
+   Quality → sft (50 steps, CFG), Fast → turbo (8 steps, no CFG), Studio →
+   base (50 steps, CFG; the only model with lego/extract/complete). The
+   proxy's model manager (`ace_proxy/src/modelManager.ts`) loads the job's
+   model with `/v1/init` before submitting it, waiting for in-flight jobs
+   first, so no job ever runs on the wrong model.
 
 6. **Task submission.** `POST /api/generate` builds the ACE-Step payload
    (`ace_proxy/src/tasks.ts: buildAcePayload`) and POSTs it to ACE-Step's
@@ -40,11 +40,9 @@ How Juno talks to the local ACE-Step 1.5 runtime.
    `thinking: true` is sent only for `text2music`, `lego`, and `complete`
    task types.
 
-7. **Polling.** The frontend polls `POST /api/tasks/query` every 4 s; the
-   proxy forwards `{task_id_list}` to ACE-Step's `/query_result` and
-   normalizes heterogeneous status fields into
-   `queued | running | succeeded | failed`
-   (`tasks.ts: normalizeAceStatus`).
+7. **Polling.** The proxy polls `/query_result` itself every 3 s and parses
+   ACE's integer status (0 running, 1 done, 2 failed) plus the JSON-encoded
+   `result` (progress, stage, error). The browser just reads the row.
 
 8. **Audio retrieval.** On success the proxy fetches the produced file via
    ACE-Step's `GET /v1/audio?path=...`, streams a copy into

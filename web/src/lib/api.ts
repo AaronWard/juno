@@ -5,7 +5,7 @@
  *  the frontend standalone in dev), callers fall back to local behavior.
  */
 import { Song } from "../data/mockSongs";
-import { Playlist, StylePreset, Voice, Workspace } from "../data/mockLibrary";
+import { LyricDoc, Playlist, StudioProject, StylePreset, Voice, Workspace } from "../data/mockLibrary";
 
 export interface HealthResponse {
   juno: string;
@@ -25,6 +25,74 @@ export interface ModelPresetStatus {
   description: string;
   available: boolean;
   loaded: boolean;
+}
+
+export interface JunoSettings {
+  aceIdleUnloadMinutes: number;
+  preloadOnSelect: boolean;
+  midiIdleStopMinutes: number;
+  midiModelSize: "small" | "medium" | "large";
+}
+
+export type AceActivity = "offline" | "starting" | "idle" | "loading" | "ready" | "generating" | "unloading";
+export type MidiActivity = "stopped" | "starting" | "ready" | "transcribing" | "stopping" | "error";
+
+export interface StatusResponse {
+  juno: string;
+  ace: {
+    reachable: boolean;
+    process: string;
+    activity: AceActivity;
+    loadedModel: string | null;
+    loadedPreset: string | null;
+    loadedLabel: string | null;
+    llmLoaded: boolean;
+    loadedLm: string | null;
+    busy: { kind: "loading" | "unloading" | "starting"; model?: string; label?: string; since: string } | null;
+    lastError: { message: string; at: string } | null;
+    activeTasks: number;
+    waitingTasks: number;
+    idleUnloadAt: string | null;
+    detail?: string;
+  };
+  midi: {
+    activity: MidiActivity;
+    reachable: boolean;
+    process: string;
+    modelSize: string | null;
+    wantedSize: string;
+    queued: number;
+    currentJob: string | null;
+    lastError: { message: string; at: string } | null;
+    stopAt: string | null;
+  };
+  vram: { usedMb: number; totalMb: number; name?: string } | null;
+  settings: JunoSettings;
+  lmBackend: string;
+  lmModel: string;
+}
+
+export interface MidiItem {
+  id: string;
+  title: string;
+  status: "queued" | "starting" | "running" | "succeeded" | "failed";
+  progress: number;
+  stage?: string;
+  error?: string;
+  sourceSongId?: string;
+  sourceAudioUrl?: string;
+  instruments: string[];
+  modelSize: string;
+  noteCount?: number;
+  durationSeconds?: number;
+  beatGrid?: { bpm: number; beats_per_bar: number } | null;
+  midiUrl?: string;
+  originalMidiUrl?: string;
+  quantizedMidiUrl?: string;
+  edited: boolean;
+  queuePosition: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface GeneratePayload {
@@ -50,6 +118,9 @@ export interface GeneratePayload {
   referenceAudioPath?: string;
   repaintStart?: number;
   repaintEnd?: number;
+  coverStrength?: number;
+  trackName?: string;
+  songType?: Song["type"];
   sourceSongId?: string;
 }
 
@@ -85,24 +156,92 @@ export const api = {
   models: () =>
     json<{ presets: ModelPresetStatus[]; aceStep: string }>("/api/models"),
 
-  initModel: (model: string) =>
-    json<{ ok: boolean; error?: string }>("/api/models/init", {
+  status: () => json<StatusResponse>("/api/status"),
+
+  /** Queue a model load; progress shows up in /api/status. */
+  loadModel: (model: string) =>
+    json<{ ok: boolean; error?: string }>("/api/models/load", {
       method: "POST",
       body: JSON.stringify({ model }),
     }),
 
-  /** Restart the ACE-Step process to free all GPU VRAM. Models lazy-load
-   *  again on the next generation or explicit Initialize. */
-  unloadModels: () =>
-    json<{ ok: boolean; detail?: string; error?: string }>(
-      "/api/models/unload",
-      { method: "POST" }
-    ),
+  /** Restart ACE-Step to free VRAM. `force` cancels a running generation. */
+  unloadModels: (force = false) =>
+    json<{ ok: boolean; error?: string }>("/api/models/unload", {
+      method: "POST",
+      body: JSON.stringify({ force }),
+    }),
+
+  stopMidiServer: () => json<{ ok: boolean }>("/api/midi/server/stop", { method: "POST" }),
+
+  patchSettings: (patch: Partial<JunoSettings>) =>
+    json<JunoSettings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+
+  retrySong: (id: string) =>
+    json<{ ok: boolean; taskId?: string; song?: Song; error?: string }>(`/api/songs/${id}/retry`, { method: "POST" }),
+
+  /* MIDI */
+  midiList: () => json<{ items: MidiItem[]; instruments: string[] }>("/api/midi"),
+  midiFromSong: (songId: string, opts: { instruments?: string[]; modelSize?: string } = {}) =>
+    json<{ ok: boolean; item: MidiItem }>("/api/midi", {
+      method: "POST",
+      body: JSON.stringify({ songId, ...opts }),
+    }),
+  midiFromFile: async (file: File, opts: { instruments?: string[]; modelSize?: string; title?: string } = {}) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (opts.instruments?.length) form.append("instruments", JSON.stringify(opts.instruments));
+    if (opts.modelSize) form.append("modelSize", opts.modelSize);
+    if (opts.title) form.append("title", opts.title);
+    const res = await fetch("/api/midi", { method: "POST", body: form });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error || "Upload failed");
+    return body as { ok: boolean; item: MidiItem };
+  },
+  midiSave: async (id: string, bytes: Uint8Array, noteCount: number) => {
+    const res = await fetch(`/api/midi/${id}/file?noteCount=${noteCount}`, {
+      method: "PUT",
+      headers: { "content-type": "audio/midi" },
+      body: new Blob([bytes as BlobPart], { type: "audio/midi" }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error || "Save failed");
+    return body as { ok: boolean; item: MidiItem };
+  },
+  midiRevert: (id: string) => json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/edit`, { method: "DELETE" }),
+  midiRename: (id: string, title: string) =>
+    json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  midiRetry: (id: string) => json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/retry`, { method: "POST" }),
+  midiDelete: (id: string) => json<{ ok: boolean }>(`/api/midi/${id}`, { method: "DELETE" }),
+
+  saveLyrics: (text: string, title?: string) =>
+    json<{ ok: boolean; lyrics: LyricDoc }>("/api/library/lyrics", {
+      method: "POST",
+      body: JSON.stringify({ text, title }),
+    }),
+  deleteLyrics: (id: string) => json<{ ok: boolean }>(`/api/library/lyrics/${id}`, { method: "DELETE" }),
+  patchStylePreset: (id: string, patch: { liked?: boolean; name?: string }) =>
+    json<{ ok: boolean; style: StylePreset }>(`/api/library/style/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  saveProject: (p: Partial<StudioProject>) =>
+    json<{ ok: boolean; project: StudioProject }>("/api/library/project", {
+      method: "POST",
+      body: JSON.stringify(p),
+    }),
+  exportProject: (projectId: string, songIds: string[]) =>
+    json<{ ok: boolean; savedTo: string }>("/api/export", {
+      method: "POST",
+      body: JSON.stringify({ projectId, songIds }),
+    }),
 
   /** Submit a generation task. When ACE-Step rejects the task the proxy
    *  still records a failed Song row and returns it with ok:false. Only a
    *  transport failure (proxy unreachable) throws without a song. */
   generate: async (payload: GeneratePayload) => {
+    // Response carries `rerouted` (preset label) when the task type needed
+    // a different model than the one selected.
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -124,6 +263,7 @@ export const api = {
       aceTaskId?: string;
       song: Song;
       error?: string;
+      rerouted?: string;
     };
   },
 
@@ -133,7 +273,11 @@ export const api = {
         taskId: string;
         songId: string;
         status: "queued" | "running" | "succeeded" | "failed";
+        stage?: string;
+        progress?: number;
         audioUrl?: string;
+        localAudioPath?: string;
+        model?: string;
         error?: string;
       }[];
     }>("/api/tasks/query", {

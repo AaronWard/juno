@@ -75,6 +75,9 @@ export interface StudioProject {
   id: string;
   name: string;
   trackCount: number;
+  tracks?: unknown[];
+  clips?: unknown[];
+  region?: { start: number; end: number };
   createdAt: string;
   updatedAt: string;
 }

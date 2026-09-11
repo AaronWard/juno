@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { Button } from "./Button";
 import { Modal } from "./Modal";
 import { Dropdown } from "./Dropdown";
+import { useJuno } from "../App";
+import { api } from "../lib/api";
 
 const STRUCTURE_TAGS = [
   "[Intro]", "[Verse]", "[Pre-Chorus]", "[Chorus]", "[Bridge]",
@@ -32,6 +34,19 @@ export function LyricsCard({ mode, onMode, lyrics, onLyrics }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const { addLyricDoc, notify } = useJuno();
+
+  /** Save the current lyrics to Library → Lyrics. */
+  const saveToLibrary = async () => {
+    if (!lyrics.trim()) return;
+    try {
+      const res = await api.saveLyrics(lyrics);
+      addLyricDoc(res.lyrics);
+      notify(`Saved "${res.lyrics.title}" to Library → Lyrics.`, "success");
+    } catch (e: any) {
+      notify(e?.message || "Could not save lyrics", "error");
+    }
+  };
 
   /** Local placeholder lyric generation from templates — no remote service. */
   const generateFromPrompt = () => {
@@ -101,6 +116,7 @@ export function LyricsCard({ mode, onMode, lyrics, onLyrics }: Props) {
                 />
                 <Button variant="icon" label="Improve lyrics locally" onClick={improve}>✨</Button>
                 <Button variant="icon" label="Expand lyric editor" onClick={() => setExpanded(true)}>⤢</Button>
+                <Button variant="icon" label="Save lyrics to your library" disabled={!lyrics.trim()} onClick={saveToLibrary}>💾</Button>
               </div>
             </>
           )}

@@ -1,75 +1,169 @@
-import React, { useState } from "react";
+/** Live engine status: which model is loaded, what ACE-Step is doing, VRAM,
+ *  and Load / Unload controls. Driven by the store's auto-polled /api/status,
+ *  so it never needs a page refresh. `compact` is the one-line sidebar form. */
+import React, { useEffect, useState } from "react";
 import { useJuno } from "../App";
-import { api } from "../lib/api";
 import { MODEL_PRESETS, presetLabel } from "../data/modelPresets";
 import { Button } from "./Button";
 import { Modal } from "./Modal";
 
-/** Backend status strip: Juno proxy + ACE-Step health, selected model,
- *  and a manual "Initialize model" action (POST /api/models/init). */
-export function ModelStatus() {
-  const { health, refreshHealth, selectedPreset } = useJuno();
-  const [initState, setInitState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
+const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  const aceOk = health?.aceStep === "ok";
-  const junoOk = health?.juno === "ok";
+function elapsed(since?: string) {
+  if (!since) return "";
+  const s = Math.max(0, Math.round((Date.now() - new Date(since).getTime()) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
-  const initModel = async () => {
-    setInitState("loading");
-    setError(null);
-    try {
-      const res = await api.initModel(selectedPreset);
-      if (!res.ok) throw new Error(res.error || "Initialization failed");
-      setInitState("done");
-      refreshHealth();
-    } catch (e: any) {
-      setInitState("error");
-      setError(e?.message || "Model initialization failed");
-    }
+export function useTicker(active: boolean) {
+  const [, setT] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const i = setInterval(() => setT((t) => t + 1), 1000);
+    return () => clearInterval(i);
+  }, [active]);
+}
+
+export function ModelStatus({ compact = false }: { compact?: boolean }) {
+  const { status, selectedPreset, loadModel, unloadModels, navigate } = useJuno();
+  const [confirmForce, setConfirmForce] = useState(false);
+  const [unloading, setUnloading] = useState(false);
+  const a = status?.ace;
+  useTicker(!!a?.busy);
+
+  if (!status || !a) {
+    return (
+      <div className={compact ? "engine-mini" : "engine-card"}>
+        <span className="status-dot bad" aria-hidden="true" />
+        <span>Juno proxy is not responding</span>
+      </div>
+    );
+  }
+
+  const tone =
+    a.activity === "ready" || a.activity === "generating"
+      ? "ok"
+      : a.activity === "offline"
+        ? "bad"
+        : a.activity === "idle"
+          ? "idle"
+          : "warn";
+  const selectedLabel = presetLabel(selectedPreset);
+  const text: Record<string, string> = {
+    offline: "ACE-Step is offline",
+    starting: "Starting ACE-Step…",
+    idle: "No model loaded",
+    loading: `Loading ${a.busy?.label || "model"}… ${elapsed(a.busy?.since)}`,
+    ready: `${a.loadedLabel} ready`,
+    generating: `Generating with ${a.loadedLabel}${a.waitingTasks ? ` · ${a.waitingTasks} waiting` : ""}`,
+    unloading: "Unloading models…",
+  };
+  const vram = status.vram;
+  const vramPct = vram ? Math.round((vram.usedMb / vram.totalMb) * 100) : 0;
+  const vramText = vram ? `${(vram.usedMb / 1024).toFixed(1)} / ${(vram.totalMb / 1024).toFixed(0)} GB` : "";
+
+  if (compact) {
+    const m = status.midi;
+    return (
+      <button className="engine-mini" onClick={() => navigate("/settings")} title="Engines — click for details">
+        <span className="engine-mini-row">
+          <span className={`status-dot ${tone}`} aria-hidden="true" />
+          <span className="engine-mini-text">{a.activity === "ready" ? a.loadedLabel?.replace("Juno ", "") : text[a.activity]}</span>
+        </span>
+        {(m.activity === "transcribing" || m.activity === "starting") && (
+          <span className="engine-mini-row">
+            <span className="status-dot warn" aria-hidden="true" />
+            <span className="engine-mini-text">{m.activity === "starting" ? "MuScriptor starting…" : "Transcribing MIDI…"}</span>
+          </span>
+        )}
+        {vram && (
+          <span className="vram-bar" title={`VRAM ${vramText}`}>
+            <span style={{ width: `${vramPct}%` }} />
+          </span>
+        )}
+      </button>
+    );
+  }
+
+  const canLoad =
+    a.reachable && (a.activity === "idle" || a.activity === "ready") && a.loadedPreset !== selectedPreset;
+  const canUnload = a.reachable && !!a.loadedModel && a.activity !== "unloading" && a.activity !== "loading";
+
+  const unload = async (force: boolean) => {
+    setConfirmForce(false);
+    setUnloading(true);
+    await unloadModels(force);
+    setUnloading(false);
   };
 
   return (
-    <div
-      className="inline-hint"
-      style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-    >
-      <span>
-        <span className={`status-dot ${junoOk ? "ok" : "bad"}`} aria-hidden="true" />
-        Juno {junoOk ? "ready" : "offline"}
-      </span>
-      <span>
-        <span
-          className={`status-dot ${aceOk ? "ok" : health ? "bad" : "warn"}`}
-          aria-hidden="true"
-        />
-        ACE-Step {aceOk ? "ready" : health ? "unavailable" : "checking…"}
-      </span>
-      <span>{presetLabel(selectedPreset)}</span>
-      <Button
-        variant="ghost"
-        onClick={initModel}
-        loading={initState === "loading"}
-        disabled={!aceOk}
-        title={
-          aceOk
-            ? "Load the selected DiT + LM into VRAM"
-            : "ACE-Step API is unavailable — model init disabled"
+    <div className="engine-card">
+      <div className="engine-row">
+        <span className={`status-dot ${tone}`} aria-hidden="true" />
+        <strong>{text[a.activity]}</strong>
+        {a.llmLoaded && a.loadedModel && <span className="inline-hint">+ {status.lmModel} ({status.lmBackend})</span>}
+      </div>
+
+      {a.activity === "idle" && (
+        <p className="inline-hint engine-note">
+          Your next Create loads {selectedLabel} automatically (about a minute the first time).
+        </p>
+      )}
+      {a.activity === "loading" && (
+        <p className="inline-hint engine-note">Queued songs start as soon as the model is in VRAM.</p>
+      )}
+      {a.activity === "offline" && a.detail && <p className="inline-hint engine-note">{a.detail}</p>}
+      {a.idleUnloadAt && a.activity === "ready" && (
+        <p className="inline-hint engine-note">Frees VRAM automatically at {clock(a.idleUnloadAt)} if unused.</p>
+      )}
+      {a.lastError && Date.now() - new Date(a.lastError.at).getTime() < 15 * 60000 && (
+        <p className="inline-error engine-note">{a.lastError.message}</p>
+      )}
+
+      {vram && (
+        <div className="vram" title={vram.name}>
+          <span className="inline-hint">VRAM</span>
+          <span className="vram-bar wide">
+            <span style={{ width: `${vramPct}%` }} />
+          </span>
+          <span className="inline-hint">{vramText}</span>
+        </div>
+      )}
+
+      <div className="engine-actions">
+        {canLoad && (
+          <Button variant="ghost" onClick={() => loadModel(selectedPreset)} title="Load the selected preset into VRAM now">
+            Load {selectedLabel}
+          </Button>
+        )}
+        {(canUnload || a.activity === "generating") && (
+          <Button
+            variant="ghost"
+            loading={unloading}
+            onClick={() => (a.activity === "generating" ? setConfirmForce(true) : unload(false))}
+            title="Restart ACE-Step to hand all of its VRAM back"
+          >
+            Unload (free VRAM)
+          </Button>
+        )}
+      </div>
+
+      <Modal
+        title="Stop the running generation?"
+        open={confirmForce}
+        onClose={() => setConfirmForce(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmForce(false)}>Keep generating</Button>
+            <Button variant="danger" onClick={() => unload(true)}>Unload anyway</Button>
+          </>
         }
       >
-        {initState === "loading" ? "Initializing…" : "Initialize model"}
-      </Button>
-      <Modal
-        title="Model initialization failed"
-        open={initState === "error"}
-        onClose={() => setInitState("idle")}
-      >
-        <p className="inline-error">{error}</p>
-        <p className="inline-hint">
-          Check that the model weights exist under /models (run
-          scripts/verify_models.py) and that the GPU has free VRAM. Presets:{" "}
-          {MODEL_PRESETS.map((p) => p.label).join(", ")}.
+        <p>
+          ACE-Step is generating right now. Unloading restarts it and the current song fails — you can press Retry on
+          its row afterwards.
         </p>
+        <p className="inline-hint">Presets: {MODEL_PRESETS.map((p) => p.label).join(", ")}.</p>
       </Modal>
     </div>
   );

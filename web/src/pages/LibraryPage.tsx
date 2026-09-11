@@ -36,14 +36,29 @@ export function LibraryPage() {
     voices,
     lyricDocs,
     stylePresets,
-    coverArt,
-    hooks,
     history,
     navigate,
     setPrefill,
     setActiveWorkspaceId,
     defaultWorkspaceId,
+    setStyleLiked,
+    removeLyricDoc,
+    patchSong,
+    playSong,
   } = useJuno();
+  // Hooks are the short clips made with "Sample this song"; liking a hook
+  // likes that clip. Cover art is the generated artwork of each song.
+  const hooks = useMemo(
+    () =>
+      songs
+        .filter((s) => !s.trashed && s.type === "sample")
+        .map((s) => ({ id: s.id, title: s.title, durationSeconds: s.durationSeconds, liked: s.liked, createdAt: s.createdAt })),
+    [songs]
+  );
+  const coverArt = useMemo(
+    () => songs.filter((s) => !s.trashed).map((s) => ({ id: s.id, title: s.title, url: "", createdAt: s.createdAt })),
+    [songs]
+  );
 
   const [tab, setTab] = useState<LibraryTab>("Songs");
   const [search, setSearch] = useState("");
@@ -52,10 +67,7 @@ export function LibraryPage() {
   const [view, setView] = useState("List");
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [likedStyles, setLikedStyles] = useState<Record<string, boolean>>({});
-  const [likedHooks, setLikedHooks] = useState<Record<string, boolean>>(
-    Object.fromEntries(hooks.map((h) => [h.id, h.liked]))
-  );
+  const likedHooks: Record<string, boolean> = Object.fromEntries(hooks.map((h) => [h.id, h.liked]));
 
   const toggleFilter = (id: string) =>
     setFilters((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
@@ -234,7 +246,7 @@ export function LibraryPage() {
             {projects.length === 0 && (
               <EmptyTab
                 title="No Studio projects yet"
-                hint="Open the Studio to start arranging — saved sessions will appear here."
+                hint="Open the Studio, arrange some clips and press Save — projects appear here."
               />
             )}
             {projects
@@ -250,7 +262,7 @@ export function LibraryPage() {
                   <span className="inline-hint">
                     {p.trackCount} tracks · updated {fmtRelative(p.updatedAt)}
                   </span>
-                  <Button onClick={() => navigate("/studio")}>Open in Studio</Button>
+                  <Button onClick={() => navigate(`/studio/${p.id}`)}>Open in Studio</Button>
                 </div>
               ))}
           </div>
@@ -305,7 +317,7 @@ export function LibraryPage() {
           {commonToolbar([], NAME_SORTS, lyricDocs.length)}
           <div className="card-grid">
             {lyricDocs.length === 0 && (
-              <EmptyTab title="No saved lyrics yet" hint="Saved lyric documents will appear here." />
+              <EmptyTab title="No saved lyrics yet" hint="Write lyrics on the Create page and press 💾 in the Lyrics card." />
             )}
             {lyricDocs
               .filter((d) => matches(d.title, d.text))
@@ -313,14 +325,17 @@ export function LibraryPage() {
                 <div key={d.id} className="asset-card">
                   <strong>{d.title}</strong>
                   <pre className="inline-hint asset-lyrics">{d.text}</pre>
-                  <Button
-                    onClick={() => {
-                      setPrefill({ lyrics: d.text, title: d.title });
-                      navigate("/create");
-                    }}
-                  >
-                    Use in Create
-                  </Button>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Button
+                      onClick={() => {
+                        setPrefill({ lyrics: d.text, title: d.title });
+                        navigate("/create");
+                      }}
+                    >
+                      Use in Create
+                    </Button>
+                    <Button variant="ghost" onClick={() => removeLyricDoc(d.id)}>Delete</Button>
+                  </div>
                 </div>
               ))}
           </div>
@@ -332,12 +347,12 @@ export function LibraryPage() {
           {commonToolbar([], NAME_SORTS, stylePresets.length)}
           <div className="card-grid">
             {stylePresets.length === 0 && (
-              <EmptyTab title="No style presets yet" hint="Saved style presets will appear here." />
+              <EmptyTab title="No style presets yet" hint="Add style chips on the Create page, then 🗂 → Save current styles." />
             )}
             {stylePresets
               .filter((p) => matches(p.name, p.styles.join(" ")))
               .map((p) => {
-                const liked = likedStyles[p.id] ?? p.liked;
+                const liked = p.liked;
                 return (
                   <div key={p.id} className="asset-card">
                     <strong>{p.name}</strong>
@@ -351,9 +366,7 @@ export function LibraryPage() {
                         variant="icon"
                         label={liked ? "Unlike style" : "Like style"}
                         active={liked}
-                        onClick={() =>
-                          setLikedStyles({ ...likedStyles, [p.id]: !liked })
-                        }
+                        onClick={() => setStyleLiked(p.id, !liked)}
                       >
                         {liked ? "♥" : "♡"}
                       </Button>
@@ -378,7 +391,7 @@ export function LibraryPage() {
           {commonToolbar([], NAME_SORTS, coverArt.length)}
           <div className="card-grid">
             {coverArt.length === 0 && (
-              <EmptyTab title="No cover art yet" hint="Locally generated cover art will appear here." />
+              <EmptyTab title="No cover art yet" hint="Every song gets generated artwork; create a song to see it here." />
             )}
             {coverArt
               .filter((c) => matches(c.title))
@@ -393,6 +406,7 @@ export function LibraryPage() {
                   <span className="inline-hint">
                     Generated locally · {fmtRelative(c.createdAt)}
                   </span>
+                  <Button onClick={() => playSong(c.id, [c.id])}>▶ Play song</Button>
                 </div>
               ))}
           </div>
@@ -404,7 +418,7 @@ export function LibraryPage() {
           {commonToolbar([], NAME_SORTS, hooks.length)}
           <div className="card-grid">
             {hooks.length === 0 && tab === "Hooks" && (
-              <EmptyTab title="No hooks yet" hint="Short clips you save will appear here." />
+              <EmptyTab title="No hooks yet" hint="Use ⋯ → Sample this song to cut a 10-second hook from any track." />
             )}
             {hooks
               .filter((h) => matches(h.title))
@@ -420,16 +434,17 @@ export function LibraryPage() {
                   </div>
                   <strong>{h.title}</strong>
                   <span className="inline-hint">{fmtDuration(h.durationSeconds)} hook</span>
-                  <Button
-                    variant="icon"
-                    label={likedHooks[h.id] ? "Unlike hook" : "Like hook"}
-                    active={!!likedHooks[h.id]}
-                    onClick={() =>
-                      setLikedHooks({ ...likedHooks, [h.id]: !likedHooks[h.id] })
-                    }
-                  >
-                    {likedHooks[h.id] ? "♥" : "♡"}
-                  </Button>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Button onClick={() => playSong(h.id, hooks.map((x) => x.id))}>▶ Play</Button>
+                    <Button
+                      variant="icon"
+                      label={likedHooks[h.id] ? "Unlike hook" : "Like hook"}
+                      active={!!likedHooks[h.id]}
+                      onClick={() => patchSong(h.id, { liked: !likedHooks[h.id] })}
+                    >
+                      {likedHooks[h.id] ? "♥" : "♡"}
+                    </Button>
+                  </div>
                 </div>
               ))}
             {tab === "Liked Hooks" &&

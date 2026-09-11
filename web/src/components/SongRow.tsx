@@ -38,7 +38,10 @@ export function SongRow({
   selected?: boolean;
   onSelect?: () => void;
 }) {
-  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong } = useJuno();
+  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, retrySong, midiItems, navigate } = useJuno();
+  // Latest MIDI transcription made from this song, if any.
+  const midi = midiItems.find((m) => m.sourceSongId === song.id);
+  const midiRunning = midi && ["queued", "starting", "running"].includes(midi.status);
   const [notesOpen, setNotesOpen] = useState(false);
   const isCurrent = currentSong?.id === song.id;
   const processing =
@@ -99,11 +102,21 @@ export function SongRow({
           {failed && <Badge tone="danger">Failed</Badge>}
           {song.trashed && <Badge tone="danger">Trashed</Badge>}
         </div>
-        <div className="song-desc">
+        <div className={`song-desc${failed ? " song-error" : ""}`}>
           {failed && song.generationError
             ? song.generationError
-            : song.description || "No description"}
+            : processing && song.generationStage
+              ? `${song.generationStage}${song.generationProgress ? ` · ${Math.round(song.generationProgress * 100)}%` : ""}`
+              : song.description || "No description"}
         </div>
+        {processing && (
+          <span className="progress-track row" aria-hidden="true">
+            <span
+              className={`progress-fill${song.generationProgress ? "" : " indeterminate"}`}
+              style={{ width: `${Math.round((song.generationProgress || 0) * 100)}%` }}
+            />
+          </span>
+        )}
         <div className="song-actions" onClick={(e) => e.stopPropagation()}>
           {showPlayCount && (
             <span style={{ marginRight: 6 }} title="Play count">
@@ -142,9 +155,22 @@ export function SongRow({
             ↗
           </Button>
           {failed && (
-            <Button variant="ghost" label="Retry" onClick={() => patchSong(song.id, { generationStatus: "queued" })}>
+            <Button
+              variant="ghost"
+              label="Resubmit this generation with the same settings"
+              onClick={() => retrySong(song.id)}
+            >
               Retry
             </Button>
+          )}
+          {midi && (
+            <button
+              className={`midi-link${midiRunning ? " running" : ""}${midi.status === "failed" ? " failed" : ""}`}
+              onClick={() => navigate(`/midi/${midi.id}`)}
+              title={midi.status === "failed" ? `MIDI extraction failed: ${midi.error}` : "Open the MIDI transcription"}
+            >
+              🎹 {midiRunning ? `MIDI ${Math.round(midi.progress * 100)}%` : midi.status === "failed" ? "MIDI failed" : "MIDI"}
+            </button>
           )}
         </div>
       </div>

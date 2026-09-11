@@ -34,6 +34,38 @@ container never deletes them.
 and non-empty, and `scripts/entrypoint.sh` symlinks them into
 `/app/ACE-Step-1.5/checkpoints/`.
 
+## MuScriptor (MIDI transcription)
+
+MuScriptor weights are **not** stored under `./models`. They are resolved
+through `huggingface_hub`'s cache, i.e. the host `./hf-cache` directory
+mounted at `/root/.cache/huggingface`:
+
+```
+./hf-cache/hub/models--MuScriptor--muscriptor-medium/   # ~1 file: model.safetensors
+```
+
+The repos are gated (CC BY-NC 4.0): accept the licence at
+`https://huggingface.co/MuScriptor/muscriptor-<size>` with the `HF_TOKEN`
+account. Sizes are `small`, `medium` (default) and `large`; switching size in
+Settings downloads that variant on its next start. Pre-download with:
+
+```bash
+# HF_HUB_CACHE, not HF_HOME: HF_HOME also moves the token file ($HF_HOME/token),
+# which silently de-authenticates the CLI and turns a gated repo into a 401.
+HF_HUB_CACHE=./hf-cache/hub hf download MuScriptor/muscriptor-medium model.safetensors
+
+# or, in the container (mount + token + permissions already correct):
+docker compose exec juno hf download MuScriptor/muscriptor-medium model.safetensors
+```
+
+The host directory is created by the container as root; a host-side download
+needs `sudo chown -R "$(id -u):$(id -g)" ./hf-cache` first.
+
+Beat detection (used for the quantized `.mid`) downloads a `beat_this`
+checkpoint from `cloud.cp.jku.at` into `/models/torch-cache` (host
+`./models/torch-cache`) on first use. It cannot be fetched with the HF CLI,
+and a failure there is non-fatal — you simply get no quantized copy.
+
 ## Caches and scratch space
 
 - Hugging Face cache: host `./hf-cache` → `/root/.cache/huggingface`

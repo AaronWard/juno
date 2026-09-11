@@ -4,19 +4,20 @@ import { MODEL_PRESETS } from "../data/modelPresets";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { ModelStatus } from "../components/ModelStatus";
-import { UnloadModelsButton } from "../components/UnloadModelsButton";
 
 const PATHS: [string, string][] = [
   ["Model weights", "./models (host) → /models (container)"],
   ["Generated audio", "./outputs/library (host) → /outputs/library"],
   ["Exports", "./outputs/exports (host) → /outputs/exports"],
+  ["MIDI files", "./outputs/midi (host) → /outputs/midi"],
   ["Uploads", "./uploads (host) → /uploads"],
   ["Library database", "./data/juno-db.json (host) → /data"],
   ["Hugging Face cache", "./hf-cache (host) → /root/.cache/huggingface"],
 ];
 
 export function SettingsPage() {
-  const { health, refreshHealth, volume, setVolume } = useJuno();
+  const { health, refreshHealth, volume, setVolume, status, saveSettings } = useJuno();
+  const settings = status?.settings;
 
   return (
     <div className="page" style={{ maxWidth: 860 }}>
@@ -46,11 +47,71 @@ export function SettingsPage() {
           </Badge>
         </p>
         <p className="inline-hint">
-          Ports: web/proxy 3000 · ACE-Step 8001. See docs/TROUBLESHOOTING.md if
-          either stays unavailable.
+          Ports: web/proxy 3000 · ACE-Step 8001 · MuScriptor 8002 (internal). See
+          docs/TROUBLESHOOTING.md if either stays unavailable.
         </p>
         <ModelStatus />
-        <UnloadModelsButton />
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <strong>Model loading</strong>
+        <p className="inline-hint" style={{ margin: "6px 0 12px" }}>
+          Juno keeps one XL model in VRAM and swaps it automatically when a song
+          needs a different preset — queued songs wait, nothing falls back to the
+          wrong model.
+        </p>
+        {settings ? (
+          <div className="settings-grid">
+            <label htmlFor="set-ace-idle">Unload ACE-Step after</label>
+            <select
+              id="set-ace-idle"
+              className="text-input compact"
+              value={settings.aceIdleUnloadMinutes}
+              onChange={(e) => saveSettings({ aceIdleUnloadMinutes: Number(e.target.value) })}
+            >
+              {[0, 5, 10, 15, 30, 60, 120].map((m) => (
+                <option key={m} value={m}>{m === 0 ? "Never" : `${m} idle minutes`}</option>
+              ))}
+            </select>
+
+            <label htmlFor="set-preload">Preload on preset change</label>
+            <label className="check">
+              <input
+                id="set-preload"
+                type="checkbox"
+                checked={settings.preloadOnSelect}
+                onChange={(e) => saveSettings({ preloadOnSelect: e.target.checked })}
+              />
+              Start loading a preset as soon as you pick it in Create (only when idle)
+            </label>
+
+            <label htmlFor="set-midi-idle">Stop MuScriptor after</label>
+            <select
+              id="set-midi-idle"
+              className="text-input compact"
+              value={settings.midiIdleStopMinutes}
+              onChange={(e) => saveSettings({ midiIdleStopMinutes: Number(e.target.value) })}
+            >
+              {[0, 2, 5, 10, 30, 60].map((m) => (
+                <option key={m} value={m}>{m === 0 ? "Never" : `${m} idle minutes`}</option>
+              ))}
+            </select>
+
+            <label htmlFor="set-midi-size">Default MIDI model</label>
+            <select
+              id="set-midi-size"
+              className="text-input compact"
+              value={settings.midiModelSize}
+              onChange={(e) => saveSettings({ midiModelSize: e.target.value as any })}
+            >
+              <option value="small">Small (103M) — fastest</option>
+              <option value="medium">Medium (307M) — balanced</option>
+              <option value="large">Large (1.4B) — most accurate</option>
+            </select>
+          </div>
+        ) : (
+          <p className="inline-hint">Settings load once the Juno proxy responds.</p>
+        )}
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
@@ -74,8 +135,9 @@ export function SettingsPage() {
           </tbody>
         </table>
         <p className="inline-hint">
-          All three presets are XL-class and sized for a 32 GB GPU. Presets
-          share one GPU slot: switching hot-swaps the loaded model.
+          All three presets are XL-class (~9 GB each) and share one GPU slot with
+          the 4B LM. Extract / Lego / Complete only exist on the base model, so
+          those tasks always run on Juno XL Studio.
         </p>
       </div>
 

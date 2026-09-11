@@ -1,6 +1,15 @@
 /** Central configuration for the Juno proxy. All values come from env with
  *  container-friendly defaults matching docker-compose.yml. */
 import path from "path";
+import { TaskType } from "./types";
+
+/** Model name from either a bare name or an absolute path. ACE-Step keys its
+ *  model-code sync and slot routing on the bare checkpoint NAME, so we always
+ *  talk to it with names (the entrypoint symlinks /models/* into checkpoints/). */
+const nameOf = (p: string) => path.basename(p.replace(/[\\/]+$/, ""));
+
+const TASKS_TURBO_SFT: TaskType[] = ["text2music", "cover", "repaint"];
+const TASKS_BASE: TaskType[] = ["text2music", "cover", "repaint", "lego", "extract", "complete"];
 
 export const config = {
   /** Port the Juno web/proxy server listens on. */
@@ -14,37 +23,64 @@ export const config = {
   modelDir: process.env.JUNO_MODEL_DIR || "/models",
 
   /** ACE-Step process working directory (supervisord `directory=`).
-   *  ACE-Step rejects absolute audio paths ("absolute audio file paths are
-   *  not allowed"), so source/reference audio is symlinked into
-   *  <aceWorkDir>/juno_audio/ and submitted as a path RELATIVE to this dir. */
+   *  ACE-Step rejects absolute audio paths, so source/reference audio is
+   *  symlinked into <aceWorkDir>/juno_audio/ and submitted RELATIVE. */
   aceWorkDir: process.env.JUNO_ACE_WORKDIR || "/app/ACE-Step-1.5",
 
-  /** 5Hz LM backend sent to ACE-Step /v1/init.
-   *  "pt"   = HuggingFace Transformers (correct output; the right choice
-   *           on torch 2.10 / Blackwell / no flash-attn).
-   *  "vllm" = nano-vllm (faster, but emits CORRUPTED audio codes without a
-   *           working flash-attn on sm_120 + torch 2.10 — ACE-Step #135). */
-  lmBackend: process.env.ACESTEP_LM_BACKEND || "pt",
+  /** supervisord program names (see supervisord.conf). */
+  aceProgram: process.env.JUNO_ACE_PROGRAM || "acestep",
+  midiProgram: process.env.JUNO_MIDI_PROGRAM || "muscriptor",
+
+  /** 5Hz LM backend. MUST be sent on every /release_task: ACE-Step's
+   *  per-request default is "vllm", which wins over the env var when the LM
+   *  lazy-loads. "pt" is the correct choice on Blackwell without flash-attn
+   *  (nano-vllm emits corrupted codes there — ACE-Step #135). */
+  //  Deliberately NOT read from ACESTEP_LM_BACKEND: older compose files set
+  //  that to "vllm". Opt in with JUNO_LM_BACKEND=vllm (supervisord passes
+  //  the same value to ACE-Step, so both sides always agree).
+  lmBackend: (process.env.JUNO_LM_BACKEND || "pt").toLowerCase(),
+
+  /** 5Hz LM checkpoint NAME (resolved under ACE-Step's checkpoints dir). */
+  lmModel: nameOf(process.env.ACESTEP_LM_MODEL_PATH || "acestep-5Hz-lm-4B"),
 
   /** Whether creative tasks send `thinking: true` (5Hz LM code generation).
-   *  Set JUNO_THINKING=false in the environment to bypass the LM entirely
-   *  (pure DiT text2music) — the key A/B test when generations sound like
-   *  noise: if audio becomes real music with this off, the LM (nano-vllm
-   *  SDPA fallback) is corrupting the codes, not the DiT. */
-  lmThinking:
-    String(process.env.JUNO_THINKING ?? "true").toLowerCase() !== "false",
+   *  JUNO_THINKING=false bypasses the LM entirely (pure DiT) — the key A/B
+   *  test when generations sound like noise. */
+  lmThinking: String(process.env.JUNO_THINKING ?? "true").toLowerCase() !== "false",
+
+  /** Model init (DiT + LM load) can take several minutes on first run. */
+  initTimeoutMs: Number(process.env.JUNO_INIT_TIMEOUT_MS || 20 * 60 * 1000),
 
   /** Where finished generations are copied for the Library. */
   get libraryDir() {
     return path.join(this.outputDir, "library");
   },
+  /** Transcribed / edited MIDI files. */
+  get midiDir() {
+    return path.join(this.outputDir, "midi");
+  },
+  /** Audio uploaded straight into the MIDI tab (not added to the Library). */
+  get midiSourceDir() {
+    return path.join(this.uploadDir, "midi-src");
+  },
+
+  /** MuScriptor transcription server (started on demand by the proxy). */
+  midiApiUrl: process.env.JUNO_MIDI_API_URL || "http://127.0.0.1:8002",
+  /** File the muscriptor supervisord command reads its model size from. */
+  get midiModelFile() {
+    return path.join(this.dataDir, "muscriptor-model");
+  },
+  midiLogFile: process.env.JUNO_MIDI_LOG || "/outputs/cache/muscriptor.log",
+  /** First start downloads weights; allow plenty of time. */
+  midiStartTimeoutMs: Number(process.env.JUNO_MIDI_START_TIMEOUT_MS || 15 * 60 * 1000),
 
   /** Path to the built React frontend (inside the Docker image). */
-  webDist:
-    process.env.JUNO_WEB_DIST || path.resolve(__dirname, "../../web/dist"),
+  webDist: process.env.JUNO_WEB_DIST || path.resolve(__dirname, "../../web/dist"),
 
   /** Model preset table. Exactly three XL presets are exposed to the UI.
-   *  All presets target slot 1 (hot-swap) — see the VRAM note in the repo. */
+   *  Juno keeps ONE DiT resident (slot 1) and swaps it through its own
+   *  serialized queue — three XL DiTs (~9 GB each) plus the 4B LM do not fit
+   *  in 32 GB together. */
   presets: {
     "juno-xl-quality": {
       id: "juno-xl-quality",
@@ -53,22 +89,18 @@ export const config = {
       ditPath: "/models/acestep-v15-xl-sft",
       lmPath: "/models/acestep-5Hz-lm-4B",
       slot: 1,
-
-      // XL-SFT quality path. Keep this explicit; do not let API defaults
-      // fall back to Turbo-ish 8-step behavior.
       inferenceSteps: 50,
-
-      // SFT/Base CFG controls.
       cfgEnabled: true,
       guidanceScale: 7.0,
       guidanceMin: 5.0,
       guidanceMax: 9.0,
       shift: 3.0,
       inferMethod: "ode",
-      useAdg: true,
+      // ADG is documented as BASE-ONLY. Sending it to SFT was a bug.
+      useAdg: false,
       cfgIntervalStart: 0.0,
       cfgIntervalEnd: 1.0,
-
+      supportedTasks: TASKS_TURBO_SFT,
       description: "Default final-quality preset",
     },
     "juno-xl-fast": {
@@ -78,11 +110,8 @@ export const config = {
       ditPath: "/models/acestep-v15-xl-turbo",
       lmPath: "/models/acestep-5Hz-lm-4B",
       slot: 1,
-
-      // Turbo is distilled and should stay fast.
       inferenceSteps: 8,
-
-      // Turbo does not use CFG, but ACE docs recommend shift=3.0.
+      // Turbo bakes guidance into distillation; ACE forces guidance to 1.0.
       cfgEnabled: false,
       guidanceScale: 1.0,
       guidanceMin: 1.0,
@@ -92,7 +121,7 @@ export const config = {
       useAdg: false,
       cfgIntervalStart: 0.0,
       cfgIntervalEnd: 1.0,
-
+      supportedTasks: TASKS_TURBO_SFT,
       description: "Fast preview preset",
     },
     "juno-xl-studio": {
@@ -102,27 +131,29 @@ export const config = {
       ditPath: "/models/acestep-v15-xl-base",
       lmPath: "/models/acestep-5Hz-lm-4B",
       slot: 1,
-
-      // Base benefits from more steps than SFT/Turbo.
+      // Upstream's Gradio default for pure base is 32; 50 is a bit better.
       inferenceSteps: 50,
-
       cfgEnabled: true,
       guidanceScale: 7.0,
       guidanceMin: 5.0,
       guidanceMax: 9.0,
       shift: 3.0,
       inferMethod: "ode",
-
-      // Leave ADG off while debugging the gibberish/noise path.
-      // ACE docs say ADG is base-only, but this makes Studio less risky first.
-      useAdg: true,
-
+      // ADG is valid on base but slower; off by default (JUNO_STUDIO_ADG=true).
+      useAdg: String(process.env.JUNO_STUDIO_ADG || "false").toLowerCase() === "true",
       cfgIntervalStart: 0.0,
       cfgIntervalEnd: 1.0,
-
+      supportedTasks: TASKS_BASE,
       description: "Advanced editing and Studio preset",
     },
   } as const,
 };
 
 export type PresetId = keyof typeof config.presets;
+export type Preset = (typeof config.presets)[PresetId];
+
+export function presetByAceModel(aceModel?: string | null): Preset | undefined {
+  if (!aceModel) return undefined;
+  const n = nameOf(aceModel);
+  return Object.values(config.presets).find((p) => p.aceModel === n);
+}

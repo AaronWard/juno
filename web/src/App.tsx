@@ -22,6 +22,7 @@ import { StudioPage } from "./pages/StudioPage";
 import { EditorPage } from "./pages/EditorPage";
 import { TrashPage } from "./pages/TrashPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { MidiPage } from "./pages/MidiPage";
 import { Song } from "./data/mockSongs";
 import {
   CoverArt,
@@ -34,7 +35,7 @@ import {
   Voice,
   Workspace,
 } from "./data/mockLibrary";
-import { api, GeneratePayload, HealthResponse } from "./lib/api";
+import { api, GeneratePayload, HealthResponse, JunoSettings, MidiItem, StatusResponse } from "./lib/api";
 import { DEFAULT_PRESET, PresetId } from "./data/modelPresets";
 import { loadPref, savePref } from "./lib/storage";
 import { newId } from "./lib/ids";
@@ -120,9 +121,32 @@ interface JunoStore {
   /* backend */
   health: HealthResponse | null;
   refreshHealth: () => void;
+  /** Live ACE-Step / MuScriptor / VRAM snapshot (auto-polled). */
+  status: StatusResponse | null;
+  loadModel: (preset: PresetId) => Promise<void>;
+  unloadModels: (force?: boolean) => Promise<void>;
+  saveSettings: (patch: Partial<JunoSettings>) => Promise<void>;
   selectedPreset: PresetId;
   setSelectedPreset: (id: PresetId) => void;
   generate: (payload: GeneratePayload) => Promise<Song>;
+  retrySong: (id: string) => Promise<void>;
+
+  /* MIDI */
+  midiItems: MidiItem[];
+  midiInstruments: string[];
+  refreshMidi: () => Promise<void>;
+  upsertMidi: (item: MidiItem) => void;
+  removeMidi: (id: string) => void;
+  extractMidi: (songId: string) => Promise<MidiItem | null>;
+
+  /* library extras */
+  addLyricDoc: (doc: LyricDoc) => void;
+  removeLyricDoc: (id: string) => void;
+  setStyleLiked: (id: string, liked: boolean) => void;
+  upsertProject: (p: StudioProject) => void;
+
+  /* toasts */
+  notify: (message: string, tone?: "info" | "error" | "success") => void;
 
   /* create prefill */
   prefill: CreatePrefill | null;
@@ -164,7 +188,11 @@ export default function App() {
   const [lyricDocs, setLyricDocs] = useState<LyricDoc[]>([]);
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [coverArt, setCoverArt] = useState<CoverArt[]>([]);
-  const [projects] = useState<StudioProject[]>([]);
+  const [projects, setProjects] = useState<StudioProject[]>([]);
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [midiItems, setMidiItems] = useState<MidiItem[]>([]);
+  const [midiInstruments, setMidiInstruments] = useState<string[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; message: string; tone: string }[]>([]);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
 
   const [activeWorkspaceId, setActiveWorkspaceIdRaw] = useState(
@@ -203,19 +231,74 @@ export default function App() {
     savePref("workspace", id);
   }, []);
 
-  /* backend bootstrap: health + library hydration */
-  const refreshHealth = useCallback(() => {
-    api
-      .health()
-      .then(setHealth)
-      .catch(() =>
-        setHealth({ juno: "unavailable", aceStep: "unavailable" } as HealthResponse)
-      );
+  const notify = useCallback((message: string, tone: "info" | "error" | "success" = "info") => {
+    const id = newId("toast");
+    setToasts((t) => [...t.slice(-3), { id, message, tone }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === "error" ? 9000 : 5000);
   }, []);
 
+  /* backend status: one snapshot, polled fast while anything is busy */
+  const statusRef = useRef<StatusResponse | null>(null);
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await api.status();
+      statusRef.current = s;
+      setStatus(s);
+      setHealth({ juno: "ok", aceStep: s.ace.reachable ? "ok" : "unavailable" });
+    } catch {
+      statusRef.current = null;
+      setStatus(null);
+      setHealth({ juno: "unavailable", aceStep: "unavailable" } as HealthResponse);
+    }
+  }, []);
+  const refreshHealth = useCallback(() => void refreshStatus(), [refreshStatus]);
+
   useEffect(() => {
-    refreshHealth();
-    const t = setInterval(refreshHealth, 30000);
+    let stop = false;
+    let timer: number;
+    const loop = async () => {
+      await refreshStatus();
+      if (stop) return;
+      const s = statusRef.current;
+      const busy =
+        !s ||
+        ["loading", "generating", "starting", "unloading"].includes(s.ace.activity) ||
+        s.ace.waitingTasks > 0 ||
+        ["starting", "transcribing", "stopping"].includes(s.midi.activity) ||
+        s.midi.queued > 0;
+      timer = window.setTimeout(loop, busy ? 1500 : 6000);
+    };
+    void loop();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [refreshStatus]);
+
+  /* MIDI jobs */
+  const refreshMidi = useCallback(async () => {
+    try {
+      const r = await api.midiList();
+      setMidiItems(r.items);
+      setMidiInstruments(r.instruments);
+    } catch {
+      /* proxy offline */
+    }
+  }, []);
+  const midiActive = midiItems.some((m) => ["queued", "starting", "running"].includes(m.status));
+  useEffect(() => {
+    if (!midiActive) return;
+    const t = setInterval(() => void refreshMidi(), 1500);
+    return () => clearInterval(t);
+  }, [midiActive, refreshMidi]);
+  const upsertMidi = useCallback((item: MidiItem) => {
+    setMidiItems((prev) => [item, ...prev.filter((m) => m.id !== item.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  }, []);
+  const removeMidi = useCallback((id: string) => setMidiItems((prev) => prev.filter((m) => m.id !== id)), []);
+
+  /* library hydration */
+  useEffect(() => {
+    void refreshMidi();
     api
       .library()
       .then(async (lib) => {
@@ -227,6 +310,7 @@ export default function App() {
         setHooks(lib?.hooks || []);
         setCoverArt(lib?.coverArt || []);
         setHistory(lib?.history || []);
+        setProjects(lib?.projects || []);
 
         for (const t of lib?.tasks || []) {
           if (t.status === "queued" || t.status === "running") {
@@ -262,8 +346,7 @@ export default function App() {
         setWorkspaces([ws]);
         setActiveWorkspaceIdRaw((cur) => cur || ws.id);
       });
-    return () => clearInterval(t);
-  }, [refreshHealth]);
+  }, [refreshMidi]);
 
   /* task polling for queued/running songs */
   useEffect(() => {
@@ -283,7 +366,11 @@ export default function App() {
                     ...s,
                     generationStatus: task.status,
                     generationError: task.error,
+                    generationStage: task.stage,
+                    generationProgress: task.progress,
+                    model: (task.model as Song["model"]) || s.model,
                     audioUrl: task.audioUrl || s.audioUrl,
+                    localAudioPath: task.localAudioPath || s.localAudioPath,
                     updatedAt: nowIso(),
                   }
                 : s
@@ -293,7 +380,7 @@ export default function App() {
       } catch {
         /* polling failure: keep tasks pending, health banner covers it */
       }
-    }, 4000);
+    }, 2000);
     return () => clearInterval(t);
   }, []);
 
@@ -532,7 +619,9 @@ export default function App() {
           throw new Error(res.error || "ACE-Step task submission failed");
         }
         if (res.taskId) pendingTaskIds.current.add(res.taskId);
-        addHistoryEvent(`Submitted ACE-Step task for "${res.song.title}"`);
+        if (res.rerouted) notify(`"${res.song.title}" uses ${res.rerouted}: that task type only exists on the base model.`);
+        addHistoryEvent(`Queued "${res.song.title}"`);
+        void refreshStatus();
         return res.song;
       } catch (e: any) {
         if (e instanceof Error && /task submission failed/i.test(e.message)) {
@@ -573,14 +662,108 @@ export default function App() {
         throw e;
       }
     },
-    [addSong, addHistoryEvent]
+    [addSong, addHistoryEvent, notify, refreshStatus]
   );
+
+  const retrySong = useCallback(
+    async (id: string) => {
+      try {
+        const res = await api.retrySong(id);
+        if (res.song) addSong(res.song);
+        if (res.taskId) pendingTaskIds.current.add(res.taskId);
+        void refreshStatus();
+      } catch (e: any) {
+        notify(e?.message || "Retry failed", "error");
+      }
+    },
+    [addSong, notify, refreshStatus]
+  );
+
+  const loadModel = useCallback(
+    async (preset: PresetId) => {
+      try {
+        await api.loadModel(preset);
+        void refreshStatus();
+      } catch (e: any) {
+        notify(e?.message || "Could not load model", "error");
+      }
+    },
+    [notify, refreshStatus]
+  );
+
+  const unloadModels = useCallback(
+    async (force = false) => {
+      try {
+        const p = api.unloadModels(force);
+        setTimeout(() => void refreshStatus(), 300);
+        await p;
+        notify("Models unloaded — VRAM freed.", "success");
+      } catch (e: any) {
+        notify(e?.message || "Unload failed", "error");
+      } finally {
+        void refreshStatus();
+      }
+    },
+    [notify, refreshStatus]
+  );
+
+  const saveSettings = useCallback(
+    async (patch: Partial<JunoSettings>) => {
+      try {
+        await api.patchSettings(patch);
+        void refreshStatus();
+      } catch (e: any) {
+        notify(e?.message || "Could not save settings", "error");
+      }
+    },
+    [notify, refreshStatus]
+  );
+
+  const extractMidi = useCallback(
+    async (songId: string): Promise<MidiItem | null> => {
+      try {
+        const res = await api.midiFromSong(songId);
+        upsertMidi(res.item);
+        notify(`Extracting MIDI from "${res.item.title}" — open the MIDI tab or use the 🎹 link on the row.`);
+        return res.item;
+      } catch (e: any) {
+        notify(e?.message || "MIDI extraction failed", "error");
+        return null;
+      }
+    },
+    [notify, upsertMidi]
+  );
+
+  const addLyricDoc = useCallback((doc: LyricDoc) => setLyricDocs((d) => [doc, ...d]), []);
+  const removeLyricDoc = useCallback((id: string) => {
+    setLyricDocs((d) => d.filter((x) => x.id !== id));
+    api.deleteLyrics(id).catch(() => {});
+  }, []);
+  const setStyleLiked = useCallback((id: string, liked: boolean) => {
+    setStylePresets((p) => p.map((x) => (x.id === id ? { ...x, liked } : x)));
+    api.patchStylePreset(id, { liked }).catch(() => {});
+  }, []);
+  const upsertProject = useCallback((proj: StudioProject) => {
+    setProjects((p) => [proj, ...p.filter((x) => x.id !== proj.id)]);
+  }, []);
 
   /* prefs persistence */
   const setSelectedPreset = useCallback((id: PresetId) => {
     setSelectedPresetRaw(id);
     savePref("preset", id);
-  }, []);
+    // Warm the model up while you write the prompt — only when nothing is
+    // generating, so browsing presets never interrupts a running job.
+    const s = statusRef.current;
+    if (
+      s?.settings.preloadOnSelect &&
+      s.ace.reachable &&
+      (s.ace.activity === "ready" || s.ace.activity === "idle") &&
+      s.ace.waitingTasks === 0 &&
+      s.ace.loadedPreset !== id
+    ) {
+      api.loadModel(id).then(() => refreshStatus()).catch(() => {});
+    }
+  }, [refreshStatus]);
   useEffect(() => savePref("volume", volume), [volume]);
   useEffect(() => savePref("sidebarCollapsed", collapsed), [collapsed]);
 
@@ -633,9 +816,25 @@ export default function App() {
     setMuted,
     health,
     refreshHealth,
+    status,
+    loadModel,
+    unloadModels,
+    saveSettings,
     selectedPreset,
     setSelectedPreset,
     generate,
+    retrySong,
+    midiItems,
+    midiInstruments,
+    refreshMidi,
+    upsertMidi,
+    removeMidi,
+    extractMidi,
+    addLyricDoc,
+    removeLyricDoc,
+    setStyleLiked,
+    upsertProject,
+    notify,
     prefill,
     setPrefill,
   };
@@ -649,6 +848,8 @@ export default function App() {
     page = <StudioPage />;
   } else if (route.startsWith("/trash")) {
     page = <TrashPage />;
+  } else if (route.startsWith("/midi")) {
+    page = <MidiPage selectedId={route.slice("/midi/".length) || undefined} />;
   } else if (route.startsWith("/settings")) {
     page = <SettingsPage />;
   } else {
@@ -661,6 +862,13 @@ export default function App() {
         <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed(!collapsed)} />
         <main className="app-main">{page}</main>
         <BottomPlayer />
+        <div className="toast-stack" role="status" aria-live="polite">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast toast-${t.tone}`}>
+              {t.message}
+            </div>
+          ))}
+        </div>
       </div>
     </StoreCtx.Provider>
   );

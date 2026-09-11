@@ -39,6 +39,13 @@ mkdir -p "${OUTPUT_DIR}/cache/triton"
 mkdir -p "${OUTPUT_DIR}/cache/torchinductor"
 mkdir -p "${UPLOAD_DIR}"
 mkdir -p "${DATA_DIR}"
+mkdir -p "${OUTPUT_DIR}/midi" "${UPLOAD_DIR}/midi-src" "${MODEL_DIR}/torch-cache"
+
+# MuScriptor model size (small|medium|large). The UI rewrites this file when
+# you switch sizes; MUSCRIPTOR_MODEL only seeds it on first boot.
+if [ ! -s "${DATA_DIR}/muscriptor-model" ]; then
+  echo "${MUSCRIPTOR_MODEL:-medium}" > "${DATA_DIR}/muscriptor-model"
+fi
 
 # 11. Checkpoint symlinks for ACE-Step (some code paths resolve models by
 #     checkpoint-relative name instead of absolute path).

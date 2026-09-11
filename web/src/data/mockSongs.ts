@@ -58,6 +58,12 @@ export interface Song {
   aceTaskId?: string;
   generationStatus?: GenerationStatus;
   generationError?: string;
+  /** Human-readable stage while queued/running ("Loading Juno XL Quality…"). */
+  generationStage?: string;
+  /** 0–1 progress reported by ACE-Step while running. */
+  generationProgress?: number;
+  /** Original request, kept by the proxy so Retry can resubmit it. */
+  generationRequest?: Record<string, unknown>;
   trashed?: boolean;
   trashedAt?: string;
   metadata: {

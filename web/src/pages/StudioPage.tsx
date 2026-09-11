@@ -8,7 +8,7 @@
  *  - "Generate section" / "Repaint region" / "Extend arrangement" still
  *    submit real ACE-Step tasks using the Juno XL Studio preset.
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useJuno } from "../App";
 import { Button } from "../components/Button";
 import { Slider } from "../components/Slider";
@@ -18,6 +18,7 @@ import { Dropdown } from "../components/Dropdown";
 import { fmtDuration } from "../lib/format";
 import { coverGradient } from "../lib/audio";
 import { newId } from "../lib/ids";
+import { api } from "../lib/api";
 
 interface Clip {
   id: string;
@@ -79,19 +80,19 @@ const HELP: Record<string, { title: string; body: string }> = {
     body:
       "These submit real ACE-Step tasks with the Juno XL Studio preset " +
       "(base model, 50 steps, CFG on):\n\n" +
-      "• Generate section — creates brand new music sized to the selected " +
-      "region (task_type text2music).\n" +
-      "• Repaint region — regenerates only the selected time range of the " +
-      "source material (task_type repaint).\n" +
-      "• Extend arrangement — continues the arrangement past its current " +
-      "end (task_type complete).\n\n" +
+      "• Generate section — creates brand new music as long as the selected " +
+      "region (task_type text2music), guided by your prompt.\n" +
+      "• Repaint region — regenerates the part of the SELECTED CLIP's song " +
+      "that sits under the region; the rest of that song is kept (repaint).\n" +
+      "• Extend clip — continues the selected clip's song past its end by " +
+      "the region's length (repaint beyond the end = outpainting).\n\n" +
       "Results land as new rows in your active workspace on the Create " +
       "page; pull them back in here with ＋ Add clip.",
   },
 };
 
 export function StudioPage() {
-  const { generate, addHistoryEvent, health, songs } = useJuno();
+  const { generate, addHistoryEvent, health, songs, route, projects, upsertProject, navigate } = useJuno();
   const [tracks, setTracks] = useState(INITIAL_TRACKS);
   const [clips, setClips] = useState<Clip[]>([]); // clean slate — no mock clips
   const [selectedClip, setSelectedClip] = useState<string | null>(null);
@@ -101,7 +102,67 @@ export function StudioPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [help, setHelp] = useState<string | null>(null);
-  const [projectName] = useState("Untitled Project");
+  const [projectName, setProjectName] = useState("Untitled Project");
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const loadedRoute = useRef<string | null>(null);
+
+  /* /studio/<projectId> opens a saved project; /studio?song=<id> drops a song in. */
+  useEffect(() => {
+    if (loadedRoute.current === route) return;
+    const [pathPart, query] = route.split("?");
+    const idFromPath = pathPart.startsWith("/studio/") ? pathPart.slice("/studio/".length) : "";
+    if (idFromPath) {
+      const proj = projects.find((x) => x.id === idFromPath);
+      if (!proj) return; // wait for library hydration
+      loadedRoute.current = route;
+      setProjectId(proj.id);
+      setProjectName(proj.name);
+      if (Array.isArray(proj.tracks) && proj.tracks.length) setTracks(proj.tracks as Track[]);
+      setClips((proj.clips as Clip[]) || []);
+      if (proj.region) setRegion(proj.region);
+      setDirty(false);
+      return;
+    }
+    const songId = new URLSearchParams(query || "").get("song");
+    if (songId) {
+      const song = songs.find((x) => x.id === songId);
+      if (!song) return;
+      loadedRoute.current = route;
+      const c: Clip = {
+        id: newId("clip"),
+        trackId: "t_music",
+        name: song.title,
+        start: 0,
+        length: Math.max(4, Math.min(TIMELINE_SECONDS, song.durationSeconds || 16)),
+        songId,
+      };
+      setClips((cs) => [...cs, c]);
+      setSelectedClip(c.id);
+      setRegion({ start: 0, end: Math.min(16, c.length) });
+      setDirty(true);
+      return;
+    }
+    loadedRoute.current = route;
+  }, [route, projects, songs]);
+
+  const saveProject = async (): Promise<string | null> => {
+    try {
+      const res = await api.saveProject({ id: projectId || undefined, name: projectName, tracks, clips, region });
+      upsertProject(res.project);
+      setProjectId(res.project.id);
+      setDirty(false);
+      if (!route.startsWith(`/studio/${res.project.id}`)) {
+        loadedRoute.current = `/studio/${res.project.id}`;
+        navigate(`/studio/${res.project.id}`);
+      }
+      return res.project.id;
+    } catch (e: any) {
+      setNotice(`Save failed: ${e?.message || e}`);
+      return null;
+    }
+  };
 
   const clip = clips.find((c) => c.id === selectedClip) || null;
   const librarySongs = songs.filter((s) => !s.trashed);
@@ -109,6 +170,7 @@ export function StudioPage() {
   const pushUndo = () => {
     setUndoStack((u) => [...u, clips.map((c) => ({ ...c }))]);
     setRedoStack([]);
+    setDirty(true);
   };
   const undo = () => {
     const prev = undoStack[undoStack.length - 1];
@@ -150,7 +212,10 @@ export function StudioPage() {
     </Button>
   );
 
-  const aceAction = async (label: string, taskType: string, extra: Record<string, unknown>) => {
+  const clipSong = clip?.songId ? songs.find((x) => x.id === clip.songId) : undefined;
+  const regionLen = Math.max(0, region.end - region.start);
+
+  const aceAction = async (label: string, taskType: string, extra: Record<string, unknown>, sourceSong?: typeof clipSong) => {
     setBusy(label);
     setNotice(null);
     try {
@@ -158,15 +223,19 @@ export function StudioPage() {
         taskType,
         model: "juno-xl-studio",
         title: `${projectName} — ${label}`,
-        prompt: `studio ${label.toLowerCase()} for section ${region.start}s–${region.end}s`,
-        styles: ["studio", "arrangement"],
-        duration: Math.max(10, region.end - region.start),
+        prompt: prompt || sourceSong?.description || "",
+        styles: sourceSong?.styles || [],
+        lyrics: sourceSong?.lyrics,
+        instrumental: sourceSong ? sourceSong.metadata.instrumental : !prompt.includes("vocal"),
+        srcAudioPath: sourceSong?.localAudioPath,
+        sourceSongId: sourceSong?.id,
+        duration: Math.max(10, regionLen),
         ...extra,
       } as any);
-      setNotice(`${label} task submitted with Juno XL Studio — track the row on the Create page.`);
+      setNotice(`${label} queued with Juno XL Studio — pull the result in with ＋ on a track when it's ready.`);
       addHistoryEvent(`Studio: ${label} (${projectName})`);
     } catch (e: any) {
-      setNotice(`${label} failed: ${e?.message || e}. A failed row documents the attempt.`);
+      setNotice(`${label} failed: ${e?.message || e}`);
     } finally {
       setBusy(null);
     }
@@ -177,19 +246,40 @@ export function StudioPage() {
       <div className="page-title-row">
         <div>
           <h1 className="page-title">Studio</h1>
-          <span className="inline-hint">{projectName} · offline session</span>
+          <input
+            className="text-input project-name"
+            value={projectName}
+            onChange={(e) => {
+              setProjectName(e.target.value);
+              setDirty(true);
+            }}
+            aria-label="Project name"
+          />
+          <span className="inline-hint">{projectId ? (dirty ? " Unsaved changes" : " Saved") : " Not saved yet"}</span>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <Button variant="ghost" disabled={!undoStack.length} onClick={undo}>↶ Undo</Button>
           <Button variant="ghost" disabled={!redoStack.length} onClick={redo}>↷ Redo</Button>
-          <Button onClick={() => { addHistoryEvent(`Saved Studio project "${projectName}"`); setNotice("Project saved locally."); }}>
+          <Button
+            onClick={async () => {
+              if (await saveProject()) setNotice("Project saved — find it in Library → Studio Projects.");
+            }}
+          >
             Save
           </Button>
           <Button
             variant="primary"
-            onClick={() => {
-              addHistoryEvent(`Exported Studio project "${projectName}"`);
-              setNotice("Export manifest queued to ./outputs/exports (host).");
+            disabled={!clips.length}
+            onClick={async () => {
+              const id = await saveProject();
+              if (!id) return;
+              try {
+                const songIds = [...new Set(clips.map((c) => c.songId).filter(Boolean))] as string[];
+                const res = await api.exportProject(id, songIds);
+                setNotice(`Exported the arrangement manifest to ${res.savedTo}`);
+              } catch (e: any) {
+                setNotice(`Export failed: ${e?.message || e}`);
+              }
             }}
           >
             Export
@@ -351,31 +441,64 @@ export function StudioPage() {
             <strong>Generate</strong>
             {helpButton("generate")}
           </div>
+          <label className="field-label" htmlFor="studio-prompt" style={{ marginTop: 6 }}>
+            Prompt
+          </label>
+          <textarea
+            id="studio-prompt"
+            className="text-area"
+            style={{ minHeight: 60 }}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="e.g. half-time breakdown, filtered drums"
+          />
           <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
             <Button
               loading={busy === "Generate section"}
+              disabled={regionLen < 10 && !prompt}
+              title="New music, as long as the selected region"
               onClick={() => aceAction("Generate section", "text2music", {})}
             >
-              ✨ Generate section (Studio model)
+              ✨ Generate section
             </Button>
             <Button
               loading={busy === "Repaint region"}
-              onClick={() =>
-                aceAction("Repaint region", "repaint", {
-                  repaintStart: region.start,
-                  repaintEnd: region.end,
-                })
-              }
+              disabled={!clip || !clipSong?.localAudioPath || regionLen < 3}
+              title={clip ? "Regenerate the selected clip under the region" : "Select a clip first"}
+              onClick={() => {
+                if (!clip || !clipSong) return;
+                const start = Math.max(0, region.start - clip.start);
+                const end = Math.min(clipSong.durationSeconds || clip.length, region.end - clip.start);
+                aceAction(
+                  "Repaint region",
+                  "repaint",
+                  { repaintStart: start, repaintEnd: Math.max(start + 3, end), duration: clipSong.durationSeconds || clip.length, songType: "replacement" },
+                  clipSong
+                );
+              }}
             >
               ♻ Repaint region
             </Button>
             <Button
-              loading={busy === "Extend arrangement"}
-              onClick={() => aceAction("Extend arrangement", "complete", {})}
+              loading={busy === "Extend clip"}
+              disabled={!clip || !clipSong?.localAudioPath}
+              title={clip ? "Continue the selected clip's song past its end" : "Select a clip first"}
+              onClick={() => {
+                if (!clip || !clipSong) return;
+                const d = clipSong.durationSeconds || clip.length;
+                const add = Math.min(90, Math.max(10, regionLen || 30));
+                aceAction(
+                  "Extend clip",
+                  "repaint",
+                  { repaintStart: Math.max(0, d - 10), repaintEnd: d + add, duration: d + add, songType: "extended" },
+                  clipSong
+                );
+              }}
             >
-              ➕ Extend arrangement
+              ➕ Extend clip by {Math.min(90, Math.max(10, Math.round(regionLen) || 30))}s
             </Button>
           </div>
+          {!clip && <p className="inline-hint" style={{ marginTop: 6 }}>Repaint and Extend work on the selected clip.</p>}
           <p className="inline-hint" style={{ marginTop: 8 }}>
             Generation uses ACE-Step base (Juno XL Studio, 50 steps, CFG on).
             Results land as rows in the active workspace.

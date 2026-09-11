@@ -24,6 +24,14 @@ generated audio, uploads, and your library — stays on your machine.
   Repaint / Extend actions on the ACE-Step base model.
 - **Editor** — per-song waveform editing: Crop, Remove Section, Replace
   Section (ACE-Step repaint), Adjust Speed, Reverse, Export.
+- **MIDI** — audio → MIDI with [MuScriptor](https://github.com/muscriptor/muscriptor)
+  (multi-instrument transcription by Kyutai × Mirelo). Upload audio or use
+  ⋯ → Extract MIDI on any song; play it on a falling-notes piano (optionally
+  over the original recording) or edit it in a piano roll, then download the
+  `.mid` or render it back to audio.
+- **Managed models** — Juno keeps one XL model in VRAM, swaps it
+  automatically per song, shows live status everywhere, and can free VRAM
+  after an idle timeout. No "initialize" step, no refreshing.
 - **Persistent player** — full transport, queue, like/dislike, volume,
   track info.
 - **Local proxy API** on port 3000 that translates Juno requests into
@@ -53,6 +61,11 @@ host-mounted `./models` directory:
 | Juno XL Fast (Turbo, 8 steps, no CFG) | `ACE-Step/acestep-v15-xl-turbo` | `/models/acestep-v15-xl-turbo` |
 | Juno XL Studio (base) | `ACE-Step/acestep-v15-xl-base` | `/models/acestep-v15-xl-base` |
 | Language model (all presets) | `ACE-Step/acestep-5Hz-lm-4B` | `/models/acestep-5Hz-lm-4B` |
+| MIDI transcription | `MuScriptor/muscriptor-{small,medium,large}` (gated, CC BY-NC 4.0) | HF cache, on first use |
+
+Only one XL DiT is resident at a time (~9 GB each); switching presets swaps
+it. MuScriptor's weights are gated: accept the licence on the model page with
+the account that owns `HF_TOKEN` before your first transcription.
 
 ## Quick Start
 
@@ -63,6 +76,13 @@ docker compose up --build
 ```
 
 Then open **http://localhost:3000**.
+
+To rebuild and recreate the container after updating Juno:
+
+```bash
+docker compose up -d --build --force-recreate juno
+docker compose logs -f juno
+```
 
 If your Docker installation doesn't support `docker compose` GPU
 reservations, the equivalent manual run is:
@@ -93,10 +113,11 @@ docker run --gpus all \
    `/app/ACE-Step-1.5/checkpoints/`.
 4. `supervisord` starts the ACE-Step API (port 8001) and the Juno
    web/proxy server (port 3000).
-5. The UI is usable immediately with mock data; real generation becomes
-   available once ACE-Step reports healthy and the model is initialized
-   (the Create panel's Model Status card shows this and offers an
-   "Initialize model" button).
+5. The UI is usable immediately. Models load on demand: the first Create
+   loads the selected preset (about a minute), and the status card in the
+   sidebar / Create panel shows every step. MuScriptor (supervisord program
+   `muscriptor`, autostart off) starts on the first transcription and stops
+   again after the idle timeout set in Settings.
 
 ## Environment Variables
 
@@ -109,12 +130,15 @@ Set in `.env` (see `.env.example`) or the shell:
 | `JUNO_UPLOAD_DIR` | `./uploads` | Host directory mounted at `/uploads` |
 | `JUNO_DATA_DIR` | `./data` | Host directory mounted at `/data` (library DB) |
 | `HF_HOME` | `./hf-cache` | Hugging Face cache mount |
-| `HF_TOKEN` | (empty) | Hugging Face token, if the repos require auth or you hit rate limits |
+| `HF_TOKEN` | (empty) | Hugging Face token. Required for MuScriptor (gated weights) |
+| `JUNO_LM_BACKEND` | `pt` | 5Hz LM backend sent to ACE-Step (`vllm` is broken on Blackwell without flash-attn) |
+| `MUSCRIPTOR_MODEL` | `medium` | Initial MIDI model size; switchable in the UI |
+| `JUNO_THINKING` | `true` | `false` bypasses the 5Hz LM (pure DiT) for A/B debugging |
 
 Container-side variables (already set in `docker-compose.yml`):
-`ACESTEP_API_HOST/PORT`, `ACESTEP_CONFIG_PATH`(/`2`/`3`) pointing at the
-three DiT models, `ACESTEP_INIT_LLM=true`, `ACESTEP_LM_MODEL_PATH`,
-`ACESTEP_LM_BACKEND=vllm`, `ACESTEP_DEVICE=auto`,
+`ACESTEP_API_HOST/PORT`, `ACESTEP_CONFIG_PATH` (startup default model name;
+`CONFIG_PATH2/3` are ignored — Juno swaps a single slot), `ACESTEP_INIT_LLM=true`,
+`ACESTEP_LM_MODEL_PATH`, `ACESTEP_DEVICE=auto`,
 `ACESTEP_USE_FLASH_ATTENTION=true`, `ACESTEP_OFFLOAD_TO_CPU=false`,
 `ACESTEP_OFFLOAD_DIT_TO_CPU=false`, `ACESTEP_TMPDIR=/outputs/tmp`,
 `TRITON_CACHE_DIR`, `TORCHINDUCTOR_CACHE_DIR`, and the `JUNO_*` mirrors.
@@ -124,7 +148,7 @@ three DiT models, `ACESTEP_INIT_LLM=true`, `ACESTEP_LM_MODEL_PATH`,
 If you prefer to pre-download (or the automatic download fails):
 
 ```bash
-pip install "huggingface_hub>=0.23"
+pip install "huggingface_hub>=0.34"   # >=0.34 provides the short `hf` CLI
 export HF_TOKEN=...   # only if required
 
 for repo in acestep-v15-xl-sft acestep-v15-xl-turbo acestep-v15-xl-base acestep-5Hz-lm-4B; do
@@ -135,6 +159,50 @@ done
 (Older CLI versions: `huggingface-cli download ...` with the same
 arguments.) The container will detect the populated directories and skip
 downloading.
+
+### MuScriptor (MIDI transcription)
+
+These weights are **gated**: accept the licence at
+`https://huggingface.co/MuScriptor/muscriptor-<size>` with the account that
+owns `HF_TOKEN` first, otherwise the download fails with 401/403.
+
+Unlike the ACE-Step models, MuScriptor resolves its weights through the
+HuggingFace **cache**, so pre-download into the `hub/` subdirectory of the
+cache you mount at `/root/.cache/huggingface` — not into `./models`.
+
+Use `HF_HUB_CACHE`, **not** `HF_HOME`: `HF_HOME` also relocates the token
+file (`$HF_HOME/token`), so overriding it makes an otherwise logged-in CLI
+anonymous and a gated repo then fails with 401 "Access denied".
+
+```bash
+# medium is the default; small / large are optional
+HF_HUB_CACHE=./hf-cache/hub hf download MuScriptor/muscriptor-medium model.safetensors
+HF_HUB_CACHE=./hf-cache/hub hf download MuScriptor/muscriptor-small  model.safetensors
+HF_HUB_CACHE=./hf-cache/hub hf download MuScriptor/muscriptor-large  model.safetensors
+```
+
+This uses your `hf auth login` credentials. If you are not logged in, pass a
+token explicitly instead: `HF_TOKEN=hf_... HF_HUB_CACHE=... hf download …`.
+
+The cache directory is created by the container as **root**, so a host-side
+download needs it to be writable by you first:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" ./hf-cache     # root inside the container is unaffected
+```
+
+Simplest alternative — run it inside the container, where the mount, the
+token and the permissions are all already correct:
+
+```bash
+docker compose exec juno hf download MuScriptor/muscriptor-medium model.safetensors
+```
+
+Otherwise the model downloads by itself on your first transcription, which
+is why that first run takes a while. Beat detection additionally fetches a
+small `beat_this` checkpoint from `cloud.cp.jku.at` into
+`/models/torch-cache` on first use; if that host is unreachable the
+transcription still succeeds, you just don't get the beat-quantized `.mid`.
 
 ## Model Verification
 
@@ -207,11 +275,19 @@ something else owns them; the in-container ports stay as-is.
 |---|---|
 | Generated songs (library copies) | `./outputs/library/` |
 | Export manifests | `./outputs/exports/` |
+| MIDI transcriptions & edits | `./outputs/midi/` |
+| Audio uploaded in the MIDI tab | `./uploads/midi-src/` |
+| MuScriptor log | `./outputs/cache/muscriptor.log` |
 | Uploaded audio | `./uploads/` |
 | Library database | `./data/juno-db.json` |
 | Model weights | `./models/` |
 | HF cache | `./hf-cache/` |
 | Temp / compile caches | `./outputs/tmp`, `./outputs/cache/` |
+
+## Upgrading
+
+See [UPGRADE.md](UPGRADE.md) for what changed in the MIDI / model-loading
+release and the one-time compose + licence steps.
 
 ## Legal Note
 
@@ -219,8 +295,10 @@ Juno is an independent, offline project for personal/local use. It is not
 affiliated with Suno. ACE-Step models are downloaded directly from their
 Hugging Face repositories under their respective licenses — review those
 licenses (including any restrictions on generated-output usage) before
-distributing anything you create. You are responsible for the content you
-generate with your own hardware.
+distributing anything you create. MuScriptor weights and their output are
+CC BY-NC 4.0 (non-commercial) and require that you have the rights to any
+audio you transcribe. You are responsible for the content you generate with
+your own hardware.
 
 ## Running Without Models (UI-only mode)
 

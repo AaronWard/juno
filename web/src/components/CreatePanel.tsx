@@ -119,7 +119,7 @@ export function CreatePanel() {
         ? "Describe the new style for this cover (prompt or style chips)"
         : "Describe your song or add styles or lyrics first"
     : !aceOk
-      ? "ACE-Step is offline — a failed row will document the attempt"
+      ? "ACE-Step is starting or offline — your song will queue and start when it's ready"
       : undefined;
 
   const create = async () => {
@@ -145,7 +145,7 @@ export function CreatePanel() {
         sourceSongId,
       });
       setStatus("succeeded");
-      setTimeout(() => setStatus("idle"), 2500);
+      setTimeout(() => setStatus((s) => (s === "succeeded" ? "idle" : s)), 2500);
     } catch (e: any) {
       setStatus("failed");
       setError(e?.message || "Generation failed");
@@ -185,7 +185,7 @@ export function CreatePanel() {
 
   const statusLabel: Record<CreateStatus, string> = {
     idle: coverSource ? "Create Cover" : "Create",
-    submitting: "Submitting…",
+    submitting: "Queuing…",
     queued: "Queued…",
     running: "Generating…",
     succeeded: "✓ Created",
@@ -402,8 +402,8 @@ export function CreatePanel() {
       {error && <p className="inline-error">{error}</p>}
       {status === "succeeded" && (
         <p className="inline-hint" style={{ color: "var(--color-success)" }}>
-          Task submitted — the new row is at the top of the workspace and will
-          update as ACE-Step reports progress.
+          Queued — the new row at the top of the workspace shows each step
+          (model loading, generating) until the audio is ready.
         </p>
       )}
 

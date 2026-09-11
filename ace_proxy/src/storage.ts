@@ -7,7 +7,7 @@
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
-import { GenerationTask, Song } from "./types";
+import { DEFAULT_SETTINGS, GenerationTask, JunoSettings, MidiRecord, Song, StudioProject } from "./types";
 
 export interface JunoDb {
   songs: Song[];
@@ -20,6 +20,9 @@ export interface JunoDb {
   hooks: { id: string; title: string; durationSeconds: number; liked: boolean; createdAt: string }[];
   coverArt: { id: string; title: string; url: string; createdAt: string }[];
   history: { id: string; at: string; event: string }[];
+  midi: MidiRecord[];
+  projects: StudioProject[];
+  settings: JunoSettings;
 }
 
 const EMPTY: JunoDb = {
@@ -33,10 +36,15 @@ const EMPTY: JunoDb = {
   hooks: [],
   coverArt: [],
   history: [],
+  midi: [],
+  projects: [],
+  settings: DEFAULT_SETTINGS,
 };
 
 /** Trashed songs are permanently deleted after this many days. */
 export const TRASH_TTL_DAYS = 14;
+
+let corruptBackedUp = false;
 
 function dbPath(): string {
   return path.join(config.dataDir, "juno-db.json");
@@ -45,8 +53,24 @@ function dbPath(): string {
 export function loadDb(): JunoDb {
   try {
     const raw = fs.readFileSync(dbPath(), "utf8");
-    return { ...EMPTY, ...JSON.parse(raw) };
-  } catch {
+    const parsed = JSON.parse(raw);
+    return {
+      ...structuredClone(EMPTY),
+      ...parsed,
+      settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
+    };
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") {
+      console.error("[juno-proxy] could not read library DB:", e?.message || e);
+      // Never silently overwrite a corrupt DB with an empty one: keep a copy.
+      try {
+        const backup = dbPath().replace(/\.json$/, `.corrupt-${Date.now()}.json`);
+        if (!corruptBackedUp) fs.copyFileSync(dbPath(), backup);
+        corruptBackedUp = true;
+      } catch {
+        /* ignore */
+      }
+    }
     return structuredClone(EMPTY);
   }
 }

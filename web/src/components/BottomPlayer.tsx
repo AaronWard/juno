@@ -289,7 +289,7 @@ export function BottomPlayer() {
                   {
                     id: "studio",
                     label: "Open in Studio",
-                    onSelect: () => navigate("/studio"),
+                    onSelect: () => navigate(`/studio?song=${currentSong.id}`),
                   },
                   {
                     id: "download",

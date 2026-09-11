@@ -51,6 +51,61 @@ other GPU consumers and prefer the Juno XL Fast preset while testing.
 Change the host side of the port mappings in `docker-compose.yml`
 (e.g. `"3300:3000"`). Container-internal ports must stay 3000/8001.
 
+## 8a. A preset "doesn't work" / only Juno XL Fast works
+
+Fixed in this release — see UPGRADE.md. If it recurs, the row now shows the
+real ACE-Step error instead of spinning. Useful checks:
+
+```bash
+curl -s localhost:3000/api/status | python3 -m json.tool   # loaded model + lastError
+docker compose logs juno | grep -E "not found in|out of memory|Model initialization failed"
+```
+
+`not found in [...]` means ACE-Step routed a job to a model it did not have
+loaded (only possible if something bypasses Juno's queue). `out of memory`
+during a load: press Unload, stop other GPU users (e.g. ollama/lmstudio),
+retry.
+
+## 8b. `hf download MuScriptor/...` says "Access denied / 401"
+
+Two different causes, often at once:
+
+1. **The CLI is anonymous.** Setting `HF_HOME=<juno cache>` also moves the
+   token file (`$HF_HOME/token`), so `hf auth login` credentials are not
+   found — the debug log shows `(authenticated: False)`. Use `HF_HUB_CACHE`
+   (which only moves the cache) or pass `HF_TOKEN=hf_...` explicitly:
+
+   ```bash
+   HF_HUB_CACHE=/mnt/data4tb/models/juno/hf-cache/hub \
+     hf download MuScriptor/muscriptor-medium model.safetensors
+   ```
+
+2. **Approval is missing.** Open
+   `https://huggingface.co/MuScriptor/muscriptor-<size>` while signed in as
+   the token's owner and accept the licence — each size is a separate repo,
+   so approving `medium` does not grant `large`. Check who you are with
+   `hf auth whoami`. Once authenticated, a still-gated repo reports 403 with
+   "awaiting approval", which distinguishes it from the 401 above.
+
+`PermissionError: ... hf-cache/.check_for_update_done` is a third, harmless
+symptom of the same setup: the directory was created by the container as
+root. `sudo chown -R "$(id -u):$(id -g)" /mnt/data4tb/models/juno/hf-cache`
+fixes it (root inside the container is unaffected), or just run the download
+inside the container:
+
+```bash
+docker compose exec juno hf download MuScriptor/muscriptor-medium model.safetensors
+```
+
+## 8c. MIDI extraction fails
+
+- "could not download its weights" → accept the licence at
+  huggingface.co/MuScriptor/muscriptor-<size> with the HF_TOKEN account.
+- Details: `./outputs/cache/muscriptor.log` (host) or
+  `docker exec juno supervisorctl tail -2000 muscriptor`.
+- "ran out of GPU memory" → unload ACE-Step (Settings) or pick the small model.
+- Audio longer than ~15 minutes is slow; split it first.
+
 ## 8. Generation tasks fail instantly
 
 Open the failed row — the error text is stored on it. Typical causes:
@@ -60,7 +115,8 @@ update (see docs/ACE_STEP_INTEGRATION.md §10), or OOM (§6).
 
 ## 9. Tasks stay "Processing" forever
 
-The frontend polls every 4 s via `/api/tasks/query`. Verify
+The proxy polls ACE-Step every 3 s (the browser only reads the result). The
+row shows its stage ("Waiting to load…", "Generating · 40%"). Verify
 `curl http://localhost:8001/health` and check the acestep log. If ACE-Step
 restarted mid-task, the task is lost — retry from the row. The Turbo
 preset (8 steps) is a fast way to confirm the pipeline works.
@@ -89,8 +145,8 @@ they live in the frontend, not the DB.
 
 ## 13. Slow first generation / long "Initialize model"
 
-First use compiles kernels (Triton/TorchInductor) and loads ~tens of GB of
-weights plus the vLLM-backed LM. Compile caches persist under
+First use compiles kernels (Triton/TorchInductor) and loads an XL DiT
+(~9 GB) plus the 4B LM (PyTorch backend). Compile caches persist under
 `./outputs/cache/`, so later runs are much faster. The init endpoint has a
 10-minute timeout in the proxy; if it times out, watch the acestep log —
 initialization usually still completes and the status card turns green on

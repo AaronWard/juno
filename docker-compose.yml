@@ -19,13 +19,14 @@
 #       ACESTEP_API_HOST: 0.0.0.0
 #       ACESTEP_API_PORT: 8001
 
-#       ACESTEP_CONFIG_PATH: /models/acestep-v15-xl-sft
-#       ACESTEP_CONFIG_PATH2: /models/acestep-v15-xl-turbo
-#       ACESTEP_CONFIG_PATH3: /models/acestep-v15-xl-base
+#       # Startup default only — Juno loads/swaps ONE XL DiT itself.
+#       # Do not set ACESTEP_CONFIG_PATH2/3 (they are ignored by the launcher).
+#       ACESTEP_CONFIG_PATH: acestep-v15-xl-turbo
 
 #       ACESTEP_INIT_LLM: "true"
-#       ACESTEP_LM_MODEL_PATH: /models/acestep-5Hz-lm-4B
-#       ACESTEP_LM_BACKEND: vllm
+#       ACESTEP_LM_MODEL_PATH: acestep-5Hz-lm-4B
+#       JUNO_LM_BACKEND: pt
+#       MUSCRIPTOR_MODEL: ${MUSCRIPTOR_MODEL:-medium}
 
 #       ACESTEP_DEVICE: auto
 #       ACESTEP_USE_FLASH_ATTENTION: "true"

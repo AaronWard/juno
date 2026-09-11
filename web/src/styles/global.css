@@ -1255,3 +1255,578 @@ select {
   z-index: 1;
   background: var(--color-bg-panel, #1c1c22);
 }
+
+/* ================================================================== */
+/* Engine status (ModelStatus)                                         */
+/* ================================================================== */
+.status-dot.idle {
+  background: var(--color-text-muted);
+}
+.status-dot.warn {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.engine-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  background: var(--color-bg-card);
+  font-size: 13px;
+  margin-top: 10px;
+}
+.engine-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.engine-note {
+  margin: 0;
+}
+.engine-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.engine-actions:empty {
+  display: none;
+}
+.vram {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vram-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-bg-pill);
+  overflow: hidden;
+  width: 100%;
+}
+.vram-bar.wide {
+  flex: 1;
+}
+.vram-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-success), var(--color-warning) 75%, var(--color-danger));
+  background-size: 400px 100%;
+  transition: width 0.4s ease;
+}
+.engine-mini {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.engine-mini:hover {
+  border-color: var(--color-border-strong);
+}
+.engine-mini-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.engine-mini-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.engine-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+}
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ================================================================== */
+/* Toasts                                                              */
+/* ================================================================== */
+.toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: calc(var(--bottom-player-height) + 14px);
+  display: grid;
+  gap: 8px;
+  z-index: 1100;
+  max-width: min(420px, calc(100vw - 36px));
+}
+.toast {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  box-shadow: var(--shadow-popover);
+  animation: toast-in 0.18s ease-out;
+}
+.toast-error {
+  border-left-color: var(--color-danger);
+}
+.toast-success {
+  border-left-color: var(--color-success);
+}
+@keyframes toast-in {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}
+
+/* ================================================================== */
+/* Progress bars                                                       */
+/* ================================================================== */
+.progress-track {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-bg-pill);
+  overflow: hidden;
+  margin: 6px 0 2px;
+}
+.progress-track.row {
+  max-width: 320px;
+}
+.progress-track.big {
+  height: 8px;
+  max-width: 520px;
+  margin: 14px 0;
+}
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.5s ease;
+  min-width: 4%;
+}
+.progress-fill.indeterminate {
+  width: 30% !important;
+  animation: indeterminate 1.3s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* ================================================================== */
+/* Song row additions                                                  */
+/* ================================================================== */
+.song-desc.song-error {
+  color: var(--color-danger);
+  -webkit-line-clamp: 3;
+}
+.midi-link {
+  margin-left: 6px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-pill);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.midi-link:hover {
+  border-color: var(--color-accent);
+}
+.midi-link.running {
+  border-color: var(--color-accent-muted);
+  color: var(--color-accent);
+}
+.midi-link.failed {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+/* ================================================================== */
+/* Remix/Edit menu help                                                */
+/* ================================================================== */
+.menu-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.menu-help {
+  width: 26px;
+  height: 26px;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+.help-list {
+  display: grid;
+  gap: 2px;
+  max-height: 58vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.help-item {
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.help-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.help-item p {
+  margin: 4px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ================================================================== */
+/* Shared small controls                                               */
+/* ================================================================== */
+.text-input.compact {
+  width: auto;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.chip-row.wrap {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+button.chip {
+  font: inherit;
+  font-size: 12px;
+}
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 10px 14px;
+  align-items: center;
+  font-size: 13px;
+}
+.settings-grid > label:nth-child(odd) {
+  color: var(--color-text-secondary);
+}
+.project-name {
+  width: 280px;
+  padding: 4px 8px;
+  margin-top: 2px;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
+}
+.project-name:hover,
+.project-name:focus {
+  border-color: var(--color-border-strong);
+}
+
+/* ================================================================== */
+/* MIDI page                                                           */
+/* ================================================================== */
+.midi-layout {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.midi-list {
+  display: grid;
+  gap: 6px;
+  max-height: calc(100vh - var(--bottom-player-height) - 150px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.midi-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+}
+.midi-item.active {
+  background: var(--color-bg-card);
+  border-color: var(--color-accent-muted);
+}
+.midi-item:not(.active):hover {
+  background: var(--color-bg-card);
+}
+.midi-item-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.midi-item-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.midi-item-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.midi-item-error {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.midi-item > .btn {
+  margin: 8px 8px 0 0;
+}
+.midi-main {
+  min-width: 0;
+}
+.midi-pending {
+  padding: 24px;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-card);
+}
+.midi-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - var(--bottom-player-height) - 130px);
+  min-height: 520px;
+}
+.midi-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.midi-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.midi-title-input {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  max-width: 480px;
+}
+.midi-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.midi-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.midi-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 14px;
+  flex-wrap: wrap;
+}
+.position-bar {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mini-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.mini-slider input[type="range"] {
+  width: 80px;
+  accent-color: var(--color-accent);
+}
+.mini-slider.disabled {
+  opacity: 0.45;
+}
+.track-strip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.track-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-bg-card);
+  padding: 2px 4px 2px 2px;
+}
+.track-chip.active {
+  border-color: var(--track-color);
+  box-shadow: inset 0 0 0 1px var(--track-color);
+}
+.track-chip.hidden {
+  opacity: 0.45;
+}
+.track-chip-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.track-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--track-color);
+}
+.track-count {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.tbtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tbtn:hover {
+  background: var(--color-bg-pill);
+  color: var(--color-text-primary);
+}
+.tbtn.on {
+  background: var(--color-accent-muted);
+  color: #fff;
+}
+.edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 34px;
+}
+.midi-view {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+}
+.midi-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  background: #0b0c10;
+}
+.midi-canvas-wrap canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.midi-canvas-wrap.roll:focus-visible {
+  outline: 2px solid var(--color-accent-muted);
+  outline-offset: 0;
+}
+.roll-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.roll-zoom {
+  position: absolute;
+  right: 10px;
+  top: 32px;
+  display: flex;
+  gap: 2px;
+  background: rgba(17, 18, 22, 0.85);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  padding: 2px;
+}
+.roll-status {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 6px 4px 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 1100px) {
+  .midi-layout {
+    grid-template-columns: 1fr;
+  }
+  .midi-list {
+    max-height: 220px;
+  }
+}
