@@ -58,6 +58,7 @@ export interface CreatePrefill {
   inspirationTitle?: string;
   srcAudioPath?: string;
   coverOfTitle?: string;
+  coverSourceDuration?: number;
   voiceName?: string;
   sourceSongId?: string;
   taskType?: string;

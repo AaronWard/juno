@@ -132,6 +132,7 @@ router.patch("/settings", (req: Request, res: Response) => {
 function typeForTask(taskType?: string): Song["type"] {
   switch (taskType) {
     case "cover":
+    case "cover-nofsq":
       return "cover";
     case "repaint":
       return "replacement";
@@ -185,6 +186,15 @@ function queueGeneration(song: Song, form: GenerateRequest): { task?: Generation
 router.post("/generate", (req: Request, res: Response) => {
   const form = (req.body || {}) as GenerateRequest;
   const ts = now();
+
+  // A cover must run at the SOURCE's length: ACE-Step lines the source's
+  // semantic codes up against the requested duration, so Juno's old fixed
+  // 120 s default truncated or stretched every cover of a different-length
+  // song — structure drift on top of the missing fidelity params.
+  if ((form.taskType === "cover" || form.taskType === "cover-nofsq") && form.sourceSongId) {
+    const src = loadDb().songs.find((s) => s.id === form.sourceSongId);
+    if (src?.durationSeconds) form.duration = Math.round(src.durationSeconds);
+  }
   const song: Song = {
     id: newId("song"),
     title: form.title || generatedTitle(),

@@ -119,6 +119,9 @@ export interface GeneratePayload {
   repaintStart?: number;
   repaintEnd?: number;
   coverStrength?: number;
+  sourceFidelity?: number;
+  coverStyleInfluence?: number;
+  noFsq?: boolean;
   trackName?: string;
   songType?: Song["type"];
   sourceSongId?: string;

@@ -163,6 +163,7 @@ export function SongOverflowMenu({ song }: { song: Song }) {
       taskType: "cover",
       srcAudioPath: song.localAudioPath,
       coverOfTitle: song.title,
+      coverSourceDuration: song.durationSeconds,
       sourceSongId: song.id,
       lyrics: song.lyrics,
       instrumental: song.metadata.instrumental,

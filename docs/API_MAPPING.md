@@ -72,7 +72,10 @@ that is unwrapped to the container path.
 | source audio | `src_audio_path` | Symlinked under the ACE workdir, sent relative |
 | inspiration audio | `reference_audio_path` | Same |
 | Replace / Extend range | `repainting_start`, `repainting_end`, `chunk_mask_mode: explicit` | `end` past the song's length outpaints |
-| Cover strength | `audio_cover_strength` | 0–1 (Mashup smoothing uses 0.6) |
+| Source Fidelity (0–100) | `cover_noise_strength` | → 0–0.5. **API default is 0.0 = no melody retention**; Juno used to inherit it |
+| Style Influence, cover (0–100) | `audio_cover_strength` | → 1.0–0.35 (inverse; fraction of DiT steps on source codes) |
+| "Raw source audio" toggle | `task_type: cover-nofsq` | Source latents instead of FSQ codes |
+| cover duration | `audio_duration` | Forced to the source song's length (was a fixed 120 s) |
 | track | `track_name`, `instruction` | lego / extract |
 | LM thinking | `thinking` | `text2music`, `lego`, `complete` only |
 
@@ -81,7 +84,7 @@ that is unwrapped to the container path.
 | UI action | task_type | Model |
 |---|---|---|
 | Create | `text2music` | selected preset |
-| Cover | `cover` | selected preset |
+| Cover | `cover` / `cover-nofsq` | selected preset (SFT recommended — see docs/COVER.md) |
 | Replace Section (menu, Editor, Studio repaint) | `repaint` | selected preset / Studio |
 | Extend / Studio Extend clip | `repaint` with `repainting_end > duration` | selected preset / Studio |
 | Mashup "Mix + smooth" | local mix → `cover` of the mix | selected preset |

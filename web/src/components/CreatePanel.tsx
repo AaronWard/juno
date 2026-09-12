@@ -20,6 +20,7 @@ import { Dropdown } from "./Dropdown";
 import { LyricsCard, LyricsMode } from "./LyricsCard";
 import { StylesCard } from "./StylesCard";
 import { MoreOptionsCard } from "./MoreOptionsCard";
+import { Slider } from "./Slider";
 import { UploadModal } from "./UploadModal";
 import { Modal } from "./Modal";
 import { ModelStatus } from "./ModelStatus";
@@ -63,7 +64,11 @@ export function CreatePanel() {
   /* Attached context (all visible as removable chips) */
   const [referenceAudioPath, setReferenceAudioPath] = useState<string | undefined>();
   const [inspirationTitle, setInspirationTitle] = useState<string | undefined>();
-  const [coverSource, setCoverSource] = useState<{ path: string; title: string } | undefined>();
+  const [coverSource, setCoverSource] = useState<{ path: string; title: string; duration?: number } | undefined>();
+  /** Cover controls — see docs/COVER.md for what each one maps to. */
+  const [sourceFidelity, setSourceFidelity] = useState(45);
+  const [coverStyleInfluence, setCoverStyleInfluence] = useState(50);
+  const [noFsq, setNoFsq] = useState(false);
   const [attachedVoice, setAttachedVoice] = useState<string | undefined>();
   const [sourceSongId, setSourceSongId] = useState<string | undefined>();
 
@@ -100,7 +105,11 @@ export function CreatePanel() {
     );
     setCoverSource(
       prefill.taskType === "cover" && prefill.srcAudioPath
-        ? { path: prefill.srcAudioPath, title: prefill.coverOfTitle || "source audio" }
+        ? {
+            path: prefill.srcAudioPath,
+            title: prefill.coverOfTitle || "source audio",
+            duration: prefill.coverSourceDuration,
+          }
         : undefined
     );
     if (prefill.voiceName) setAttachedVoice(prefill.voiceName);
@@ -128,6 +137,9 @@ export function CreatePanel() {
     try {
       await generate({
         taskType: coverSource ? "cover" : "text2music",
+        sourceFidelity: coverSource ? sourceFidelity : undefined,
+        coverStyleInfluence: coverSource ? coverStyleInfluence : undefined,
+        noFsq: coverSource ? noFsq : undefined,
         model: selectedPreset,
         prompt,
         styles: chips,
@@ -139,7 +151,8 @@ export function CreatePanel() {
         exclude: exclude || undefined,
         title: title || undefined,
         workspaceId: activeWorkspaceId,
-        duration: 120,
+        // A cover runs at the source's length; only fresh songs use the default.
+        duration: coverSource?.duration ? Math.round(coverSource.duration) : 120,
         srcAudioPath: coverSource?.path,
         referenceAudioPath,
         sourceSongId,
@@ -280,6 +293,48 @@ export function CreatePanel() {
           <button className="btn btn-ghost" onClick={() => setCoverSource(undefined)}>
             Remove
           </button>
+        </div>
+      )}
+      {coverSource && (
+        <div className="card cover-card">
+          <strong>Cover controls</strong>
+          <Slider
+            label="Source Fidelity"
+            value={sourceFidelity}
+            onChange={setSourceFidelity}
+            formatValue={(v) => (v < 20 ? "loose" : v < 55 ? "balanced" : v < 80 ? "close" : "very close")}
+          />
+          <p className="inline-hint">
+            How much of the original melody and phrasing is kept. Low reinterprets freely; high holds the tune but
+            resists the new style, and very high can sound grainy.
+          </p>
+          <Slider
+            label="Style Influence"
+            value={coverStyleInfluence}
+            onChange={setCoverStyleInfluence}
+            formatValue={(v) => (v < 25 ? "subtle" : v < 60 ? "clear" : v < 85 ? "strong" : "transform")}
+          />
+          <p className="inline-hint">
+            How hard the new style below is pushed. Higher hands more of the arrangement to your prompt and less to the
+            original.
+          </p>
+          <label className="check" style={{ marginTop: 4 }}>
+            <input type="checkbox" checked={noFsq} onChange={(e) => setNoFsq(e.target.checked)} />
+            Condition on raw source audio (no code quantization)
+          </label>
+          <p className="inline-hint">
+            An alternative route to the source that keeps more detail. Worth trying when a cover loses the tune; it can
+            also drag the old production along with it.
+          </p>
+          {preset.id === "juno-xl-fast" && (
+            <p className="inline-hint" style={{ color: "var(--color-warning)" }}>
+              ACE-Step's melody-retention guidance targets the SFT model — switch to Juno XL Quality for covers that
+              need to stay recognisable.
+            </p>
+          )}
+          {coverSource.duration ? (
+            <p className="inline-hint">Runs at the source's length ({Math.round(coverSource.duration)}s).</p>
+          ) : null}
         </div>
       )}
       {inspirationTitle && (

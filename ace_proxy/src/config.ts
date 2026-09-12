@@ -8,8 +8,8 @@ import { TaskType } from "./types";
  *  talk to it with names (the entrypoint symlinks /models/* into checkpoints/). */
 const nameOf = (p: string) => path.basename(p.replace(/[\\/]+$/, ""));
 
-const TASKS_TURBO_SFT: TaskType[] = ["text2music", "cover", "repaint"];
-const TASKS_BASE: TaskType[] = ["text2music", "cover", "repaint", "lego", "extract", "complete"];
+const TASKS_TURBO_SFT: TaskType[] = ["text2music", "cover", "cover-nofsq", "repaint"];
+const TASKS_BASE: TaskType[] = ["text2music", "cover", "cover-nofsq", "repaint", "lego", "extract", "complete"];
 
 export const config = {
   /** Port the Juno web/proxy server listens on. */

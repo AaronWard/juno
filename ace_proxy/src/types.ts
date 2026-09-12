@@ -9,6 +9,7 @@ export type AceModelName =
 export type TaskType =
   | "text2music"
   | "cover"
+  | "cover-nofsq"
   | "repaint"
   | "lego"
   | "extract"
@@ -127,7 +128,13 @@ export interface GenerateRequest {
   referenceAudioPath?: string; // "Use as Inspiration"
   repaintStart?: number;
   repaintEnd?: number;
-  /** Cover: how closely to follow the source (0–1, ACE audio_cover_strength). */
+  /** Cover "Source Fidelity" 0–100 → ACE cover_noise_strength (melody retention). */
+  sourceFidelity?: number;
+  /** Cover "Style Influence" 0–100 → ACE audio_cover_strength (inverted). */
+  coverStyleInfluence?: number;
+  /** Use raw source latents instead of FSQ codes (task_type cover-nofsq). */
+  noFsq?: boolean;
+  /** Raw passthrough (mashup smoothing); 0–1 ACE audio_cover_strength. */
   coverStrength?: number;
   /** Lego/extract: which instrument track to generate or isolate. */
   trackName?: string;

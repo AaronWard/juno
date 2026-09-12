@@ -1830,3 +1830,13 @@ button.chip {
     max-height: 220px;
   }
 }
+
+/* Cover controls on the Create panel */
+.cover-card {
+  display: grid;
+  gap: 6px;
+  border-color: var(--color-accent-muted);
+}
+.cover-card .inline-hint {
+  margin: 0 0 4px;
+}

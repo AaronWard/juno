@@ -286,6 +286,8 @@ something else owns them; the in-container ports stay as-is.
 
 ## Upgrading
 
+Cover behaviour, its controls and the research behind them: [docs/COVER.md](docs/COVER.md).
+
 See [UPGRADE.md](UPGRADE.md) for what changed in the MIDI / model-loading
 release and the one-time compose + licence steps.
 

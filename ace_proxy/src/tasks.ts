@@ -20,6 +20,7 @@ export function presetFor(model?: string): Preset {
 /** lego / extract / complete only exist on the BASE model. Turbo and SFT
  *  would silently ignore the task, so route those to Juno XL Studio. */
 export function resolvePreset(model: string | undefined, taskType: TaskType): { preset: Preset; rerouted: boolean } {
+  if (taskType === "cover-nofsq") taskType = "cover";
   const wanted = presetFor(model);
   if ((wanted.supportedTasks as readonly TaskType[]).includes(taskType)) return { preset: wanted, rerouted: false };
   return { preset: config.presets["juno-xl-studio"], rerouted: true };
@@ -51,7 +52,10 @@ export function toAceRelativeAudioPath(absPath?: string): string | undefined {
 
 /** Map the Juno Create form to an ACE-Step /release_task payload. */
 export function buildAcePayload(req: GenerateRequest, preset: Preset): Record<string, unknown> {
-  const taskType: TaskType = req.taskType || "text2music";
+  let taskType: TaskType = req.taskType || "text2music";
+  // "no FSQ" conditions on the source's raw latents instead of quantized audio
+  // codes — a second, independent fidelity path.
+  if (taskType === "cover" && req.noFsq) taskType = "cover-nofsq";
 
   const styleText = (req.styles || []).join(", ");
   const promptParts = [req.prompt, styleText].filter(Boolean) as string[];
@@ -111,7 +115,7 @@ export function buildAcePayload(req: GenerateRequest, preset: Preset): Record<st
   if (src) payload.src_audio_path = src;
   if (ref) payload.reference_audio_path = ref;
 
-  if (["cover", "repaint", "lego", "extract", "complete"].includes(taskType) && !src) {
+  if (["cover", "cover-nofsq", "repaint", "lego", "extract", "complete"].includes(taskType) && !src) {
     throw new Error(`"${taskType}" needs source audio, but this song has no local audio file.`);
   }
 
@@ -123,8 +127,24 @@ export function buildAcePayload(req: GenerateRequest, preset: Preset): Record<st
   }
   if (taskType === "repaint") payload.chunk_mask_mode = "explicit";
 
-  if (taskType === "cover" && req.coverStrength != null) {
-    payload.audio_cover_strength = clamp(req.coverStrength, 0, 1);
+  if (taskType === "cover" || taskType === "cover-nofsq") {
+    // ACE-Step has TWO independent cover knobs; Juno previously sent neither,
+    // so every cover ran at cover_noise_strength=0 — the API default, which
+    // upstream documents as "0 = no melody retention (pure style transfer)".
+    // That is why covers came back sounding unrelated to the source.
+    //
+    //  cover_noise_strength : how much of the source's melody/latent detail
+    //                         seeds the denoise. 0 = none, 1 = closest to src.
+    //                         Upstream recommends 0.1–0.25 on SFT; users report
+    //                         noise/distortion at high values, so Juno's
+    //                         Source Fidelity slider maps into a safe band.
+    //  audio_cover_strength : fraction of DiT steps conditioned on the source's
+    //                         semantic codes vs. text-only. 1.0 = every step
+    //                         follows the source plan, lower = more freedom for
+    //                         the caption. This is Style Influence, inverted.
+    payload.cover_noise_strength = coverNoiseFor(req.sourceFidelity);
+    payload.audio_cover_strength = coverCodesFor(req.coverStyleInfluence);
+    if (req.coverStrength != null) payload.audio_cover_strength = clamp(req.coverStrength, 0, 1);
   }
   if ((taskType === "lego" || taskType === "extract") && req.trackName) {
     payload.track_name = req.trackName;
@@ -299,6 +319,25 @@ export function normalizeAceStatus(raw: any): NormalizedStatus {
     return { status: queued ? "queued" : "running", progress, stage };
   }
   return { status: "queued" };
+}
+
+/** Source Fidelity 0–100 → cover_noise_strength.
+ *  Capped at 0.5: above roughly that, upstream users report noisy/distorted
+ *  output, and the source stops yielding to the new style at all. */
+export function coverNoiseFor(fidelity: number | undefined): number {
+  return round2((clamp(fidelity ?? 45, 0, 100) / 100) * 0.5);
+}
+
+/** Style Influence 0–100 → audio_cover_strength (INVERSE: more style = fewer
+ *  source-conditioned steps). Floor 0.35 so a cover never degrades into pure
+ *  text2music, which is what "sounds nothing like the source" really was. */
+export function coverCodesFor(styleInfluence: number | undefined): number {
+  const si = clamp(styleInfluence ?? 50, 0, 100);
+  return round2(1.0 - (si / 100) * 0.65);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function guidanceForStyleInfluence(styleInfluence: number | undefined, preset: Preset): number {
