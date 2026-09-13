@@ -215,3 +215,40 @@ export function downloadUrl(url: string, filename: string): void {
   a.click();
   a.remove();
 }
+
+/** Audition a speed change before committing to it.
+ *
+ *  Uses the same resample-style rate change as `changeSpeed`, so what you hear
+ *  is what gets rendered (pitch moves with speed). Returns a stop function.
+ */
+export async function previewSpeed(
+  url: string,
+  rate: number,
+  onEnd?: () => void
+): Promise<() => void> {
+  const buf = await loadBuffer(url);
+  const c = ctx();
+  if (c.state === "suspended") await c.resume();
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = Math.min(4, Math.max(0.25, rate));
+  src.connect(c.destination);
+  src.onended = () => onEnd?.();
+  // Preview from ~20% in: intros are often sparse and a speed change is much
+  // easier to judge over the body of the track.
+  const start = Math.min(buf.duration * 0.2, Math.max(0, buf.duration - 12));
+  src.start(0, start, Math.min(12 * src.playbackRate.value, buf.duration - start));
+  return () => {
+    src.onended = null;
+    try {
+      src.stop();
+    } catch {
+      /* already stopped */
+    }
+    try {
+      src.disconnect();
+    } catch {
+      /* ignore */
+    }
+  };
+}

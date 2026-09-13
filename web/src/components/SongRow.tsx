@@ -8,6 +8,7 @@ import { Button } from "./Button";
 import { SongOverflowMenu } from "./SongOverflowMenu";
 import { NotesModal } from "./NotesModal";
 import { presetLabel } from "../data/modelPresets";
+import { useQuickDelete } from "../lib/useQuickDelete";
 
 const TYPE_LABEL: Record<Song["type"], string> = {
   song: "Song",
@@ -38,7 +39,10 @@ export function SongRow({
   selected?: boolean;
   onSelect?: () => void;
 }) {
-  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, retrySong, midiItems, navigate } = useJuno();
+  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, deleteForever, retrySong, midiItems, navigate } =
+    useJuno();
+  // Hold Shift to reveal one-click delete on every row.
+  const quickDelete = useQuickDelete();
   // Latest MIDI transcription made from this song, if any.
   const midi = midiItems.find((m) => m.sourceSongId === song.id);
   const midiRunning = midi && ["queued", "starting", "running"].includes(midi.status);
@@ -176,6 +180,27 @@ export function SongRow({
       </div>
 
       <div className="song-row-right" onClick={(e) => e.stopPropagation()}>
+        {quickDelete && (
+          <Button
+            variant="icon"
+            label={song.trashed ? `Delete "${song.title}" forever` : `Move "${song.title}" to Trash`}
+            title={
+              song.trashed
+                ? "Delete forever (Shift held)"
+                : "Move to Trash (Shift held) — recoverable for 14 days"
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              // From the Library this is a trash (recoverable). From Trash it is
+              // the real delete. A one-keystroke action should not be able to
+              // destroy anything that is not already in the bin.
+              if (song.trashed) deleteForever(song.id);
+              else trashSong(song.id);
+            }}
+          >
+            {song.trashed ? "🗑" : "🗄"}
+          </Button>
+        )}
         <SongOverflowMenu song={song} />
       </div>
 

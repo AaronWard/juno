@@ -215,6 +215,7 @@ export class MidiPlayer {
   private startPos = 0;
   private nextIdx = 0;
   private audioSrc: AudioBufferSourceNode | null = null;
+  private audioOffset = 0;
   audioBuffer: AudioBuffer | null = null;
   playing = false;
   duration = 0;
@@ -255,6 +256,15 @@ export class MidiPlayer {
   setAudio(buf: AudioBuffer | null) {
     this.audioBuffer = buf;
     if (buf) this.duration = Math.max(this.duration, buf.duration);
+  }
+
+  /** Nudge the original-audio layer against the MIDI, in seconds.
+   *  Positive = the recording plays LATER than the transcription. MuScriptor
+   *  reports an `onset_delay` per transcription and the beat-quantized copy is
+   *  snapped to a grid, so a fixed offset is sometimes needed to line the two
+   *  up for A/B listening. Applied on the next play()/seek(). */
+  setAudioOffset(sec: number) {
+    this.audioOffset = sec;
   }
 
   setMidiVolume(v: number) {
@@ -303,16 +313,38 @@ export class MidiPlayer {
   async play(from?: number) {
     if (this.ctx.state === "suspended") await this.ctx.resume();
     this.stopVoices();
+    // A second play() (seek-while-playing, the decode effect re-seeking once the
+    // original audio lands, a double-tap on ▶) used to create a second
+    // AudioBufferSourceNode and overwrite this.audioSrc, orphaning the first.
+    // The orphan kept playing forever — two copies of the original at once, and
+    // pause() could only ever stop the newest one.
+    this.stopAudioSrc();
     const pos = Math.max(0, Math.min(from ?? this.pausedAt, this.duration));
     this.startPos = pos >= this.duration - 0.05 ? 0 : pos;
     this.startCtxTime = this.ctx.currentTime + 0.05;
     this.nextIdx = this.indexAt(this.startPos);
     this.playing = true;
-    if (this.audioBuffer && this.startPos < this.audioBuffer.duration) {
+    // Where in the recording we are, accounting for the A/B alignment nudge.
+    const bufferPos = this.startPos - this.audioOffset;
+    if (this.audioBuffer && bufferPos < this.audioBuffer.duration) {
       const s = this.ctx.createBufferSource();
       s.buffer = this.audioBuffer;
       s.connect(this.audioBus);
-      s.start(this.startCtxTime, this.startPos);
+      s.onended = () => {
+        if (this.audioSrc === s) this.audioSrc = null;
+        try {
+          s.disconnect();
+        } catch {
+          /* already gone */
+        }
+      };
+      if (bufferPos >= 0) {
+        s.start(this.startCtxTime, bufferPos);
+      } else {
+        // The recording hasn't begun yet at this playhead position: start it
+        // late rather than clamping to 0, which would misalign it.
+        s.start(this.startCtxTime - bufferPos, 0);
+      }
       this.audioSrc = s;
     }
     this.tick();
@@ -341,12 +373,25 @@ export class MidiPlayer {
     if (this.timer != null) clearInterval(this.timer);
     this.timer = null;
     this.stopVoices();
+    this.stopAudioSrc();
+  }
+
+  /** Stop and release the original-audio source, if any. Safe to call twice. */
+  private stopAudioSrc() {
+    const s = this.audioSrc;
+    this.audioSrc = null;
+    if (!s) return;
+    s.onended = null;
     try {
-      this.audioSrc?.stop();
+      s.stop();
+    } catch {
+      /* never started, or already stopped */
+    }
+    try {
+      s.disconnect();
     } catch {
       /* ignore */
     }
-    this.audioSrc = null;
   }
 
   private stopVoices() {

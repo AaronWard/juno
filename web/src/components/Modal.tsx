@@ -20,11 +20,22 @@ interface Props {
 export function Modal({ title, open, onClose, children, footer }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
+  // Callers define onClose inline, so its identity changes on EVERY render.
+  // Depending on it re-ran this effect on every keystroke, which re-fired the
+  // initial-focus timeout and yanked the caret out of whatever the user was
+  // typing into and onto the first focusable element (the Start range input in
+  // Replace Section, the song <select> in Mashup). Keep it in a ref and depend
+  // on `open` alone.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && ref.current) {
         const focusables = ref.current.querySelectorAll<HTMLElement>(
           'button, input, textarea, select, [tabindex]:not([tabindex="-1"])'
@@ -43,15 +54,21 @@ export function Modal({ title, open, onClose, children, footer }: Props) {
     };
     document.addEventListener("keydown", onKey);
     setTimeout(() => {
-      ref.current
-        ?.querySelector<HTMLElement>("button, input, textarea, select")
-        ?.focus();
+      const root = ref.current;
+      if (!root) return;
+      // Prefer a text field over a range slider or a button: focusing a slider
+      // both loses the caret and makes arrow keys silently drag the handle.
+      const preferred =
+        root.querySelector<HTMLElement>(
+          'input[type="text"], input:not([type]), input[type="number"], input[type="search"], textarea'
+        ) || root.querySelector<HTMLElement>("select, button, input");
+      preferred?.focus();
     }, 0);
     return () => {
       document.removeEventListener("keydown", onKey);
       prev?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return createPortal(

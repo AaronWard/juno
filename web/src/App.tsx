@@ -106,6 +106,9 @@ interface JunoStore {
   isPlaying: boolean;
   playSong: (id: string, queueIds?: string[]) => void;
   togglePlay: () => void;
+  /** Explicit play/pause, used by the global transport registry so MIDI or
+   *  Editor playback can stop the bottom player without toggling it back on. */
+  setPlaying: (v: boolean) => void;
   playNext: () => void;
   playPrev: () => void;
   queue: string[];
@@ -565,6 +568,7 @@ export default function App() {
     );
   }, []);
   const togglePlay = useCallback(() => setIsPlaying((p) => !p), []);
+  const setPlaying = useCallback((v: boolean) => setIsPlaying(v), []);
 
   const orderedQueue = useMemo(() => {
     if (!shuffle) return queue;
@@ -803,6 +807,7 @@ export default function App() {
     isPlaying,
     playSong,
     togglePlay,
+    setPlaying,
     playNext,
     playPrev,
     queue: orderedQueue,

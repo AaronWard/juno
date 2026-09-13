@@ -13,6 +13,7 @@ import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
 import { coverGradient } from "../lib/audio";
 import { downloadUrl } from "../lib/dsp";
+import { claimTransport, releaseTransport } from "../lib/transport";
 import { Button } from "./Button";
 import { QueueDrawer } from "./QueueDrawer";
 import { Modal } from "./Modal";
@@ -27,6 +28,7 @@ export function BottomPlayer() {
     currentSong,
     isPlaying,
     togglePlay,
+    setPlaying,
     playNext,
     playPrev,
     shuffle,
@@ -44,6 +46,9 @@ export function BottomPlayer() {
   } = useJuno();
 
   const audioRef = useRef<HTMLAudioElement>(null);
+  // Held in a ref so the transport claim never captures a stale setter.
+  const setPlayingRef = useRef(setPlaying);
+  setPlayingRef.current = setPlaying;
   const [pos, setPos] = useState(0);
   const [dur, setDur] = useState(0);
   const [seeking, setSeeking] = useState(false);
@@ -76,8 +81,11 @@ export function BottomPlayer() {
     const el = audioRef.current;
     if (!el || !hasRealAudio) return;
     if (isPlaying) {
+      // Starting here stops MIDI-tab / Editor playback, and vice versa.
+      claimTransport("player", () => setPlayingRef.current(false));
       el.play().catch(() => setError("Browser could not play this audio file."));
     } else {
+      releaseTransport("player");
       el.pause();
     }
   }, [isPlaying, hasRealAudio, currentSong?.id]);

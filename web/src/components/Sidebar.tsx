@@ -31,7 +31,7 @@ export function Sidebar({
       <div className="sidebar-logo-row">
         {!collapsed && <span className="sidebar-logo">JUNO</span>}
         <button
-          className="btn btn-icon"
+          className="sidebar-collapse-toggle"
           onClick={onToggleCollapse}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
@@ -69,7 +69,9 @@ export function Sidebar({
         ))}
       </div>
 
-      <div style={{ marginTop: "auto" }}>{!collapsed && <ModelStatus compact />}</div>
+      <div style={{ marginTop: "auto" }}>
+        <ModelStatus compact />
+      </div>
 
       <div className="sidebar-nav">
         <Dropdown

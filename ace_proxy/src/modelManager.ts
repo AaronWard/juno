@@ -161,6 +161,20 @@ async function ensureModel(preset: Preset, onStage?: (s: string) => void): Promi
   }
 
   const from = health.loadedModel;
+
+  // ACE-Step has no unload endpoint, and POST /v1/init does NOT free the
+  // resident DiT before allocating the new one. Loading Quality on top of Fast
+  // therefore asked a 32 GB card to hold two ~9 GB XL DiTs plus the 4B LM,
+  // which surfaced as "CUDA out of memory" during LM init. Restarting the
+  // process is the only way to guarantee exactly one DiT is resident.
+  if (from && from !== preset.aceModel) {
+    onStage?.(`Freeing ${labelOf(from)} before loading ${preset.label}…`);
+    console.log(`[juno-proxy] restarting ACE-Step to swap ${from} -> ${preset.aceModel}`);
+    await doUnload(`switching to ${preset.label}`);
+    await refreshHealth();
+    if (health.loadedModel === preset.aceModel) return;
+  }
+
   busy = { kind: "loading", model: preset.aceModel, since: now() };
   onStage?.(`Loading ${preset.label}${from ? ` (replacing ${labelOf(from)})` : ""}…`);
   console.log(`[juno-proxy] loading ${preset.aceModel} (was ${from || "nothing"})`);

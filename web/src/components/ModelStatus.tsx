@@ -61,11 +61,22 @@ export function ModelStatus({ compact = false }: { compact?: boolean }) {
   const vram = status.vram;
   const vramPct = vram ? Math.round((vram.usedMb / vram.totalMb) * 100) : 0;
   const vramText = vram ? `${(vram.usedMb / 1024).toFixed(1)} / ${(vram.totalMb / 1024).toFixed(0)} GB` : "";
+  // The fill is vramPct% of the track, so a background this many percent of the
+  // FILL spans exactly the full track — the ramp then reads the same at every
+  // width, instead of being squashed into the filled part.
+  const vramFill = {
+    width: `${vramPct}%`,
+    backgroundSize: `${vramPct > 0 ? (10000 / vramPct).toFixed(2) : 100}% 100%`,
+  };
 
   if (compact) {
     const m = status.midi;
     return (
-      <button className="engine-mini" onClick={() => navigate("/settings")} title="Engines — click for details">
+      // Hovering expands into the full card (idle-unload time, VRAM, Load /
+      // Unload). The Create panel used to render a second copy of that card;
+      // this is the single place it lives now.
+      <div className="engine-mini-wrap">
+      <button className="engine-mini" onClick={() => navigate("/settings")} title="Engines — hover for details, click for Settings">
         <span className="engine-mini-row">
           <span className={`status-dot ${tone}`} aria-hidden="true" />
           <span className="engine-mini-text">{a.activity === "ready" ? a.loadedLabel?.replace("Juno ", "") : text[a.activity]}</span>
@@ -78,10 +89,14 @@ export function ModelStatus({ compact = false }: { compact?: boolean }) {
         )}
         {vram && (
           <span className="vram-bar" title={`VRAM ${vramText}`}>
-            <span style={{ width: `${vramPct}%` }} />
+            <span style={vramFill} />
           </span>
         )}
       </button>
+        <div className="engine-mini-pop" role="group" aria-label="Engine details">
+          <ModelStatus />
+        </div>
+      </div>
     );
   }
 
@@ -124,7 +139,7 @@ export function ModelStatus({ compact = false }: { compact?: boolean }) {
         <div className="vram" title={vram.name}>
           <span className="inline-hint">VRAM</span>
           <span className="vram-bar wide">
-            <span style={{ width: `${vramPct}%` }} />
+            <span style={vramFill} />
           </span>
           <span className="inline-hint">{vramText}</span>
         </div>

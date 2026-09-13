@@ -10,7 +10,7 @@
  *  Local (browser):  Reverse, Adjust Speed, Crop, Remove Section, Sample, Mashup mix
  *  Metadata only:    Reuse Prompt, Use as Inspiration (form prefill)
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useJuno } from "../App";
 import { Song } from "../data/mockSongs";
 import { Dropdown } from "./Dropdown";
@@ -20,6 +20,7 @@ import { Slider } from "./Slider";
 import { Badge } from "./Badge";
 import { PlaylistMenuSection } from "./PlaylistMenuSection";
 import { api } from "../lib/api";
+import { claimTransport, releaseTransport } from "../lib/transport";
 import { fmtDuration } from "../lib/format";
 import {
   bufferToFile,
@@ -30,6 +31,7 @@ import {
   loadBuffer,
   mixBuffers,
   removeSection,
+  previewSpeed,
   reverseBuffer,
 } from "../lib/dsp";
 
@@ -76,9 +78,16 @@ export function SongOverflowMenu({ song }: { song: Song }) {
   const [extendFrom, setExtendFrom] = useState(Math.max(0, dur - 10));
   const [extendBy, setExtendBy] = useState(30);
   const [speed, setSpeed] = useState(100);
+  const [previewing, setPreviewing] = useState(false);
+  const stopPreviewRef = useRef<(() => void) | null>(null);
   const [secondSourceId, setSecondSourceId] = useState("");
   const [blend, setBlend] = useState(50);
+  /** Which song's words the mashup keeps. Suno offers the same choice. */
+  const [lyricsSource, setLyricsSource] = useState<"a" | "b" | "both" | "none">("a");
   const [busy, setBusy] = useState(false);
+  /** Label of an in-flight local render, for ops fired straight from the menu
+   *  (Reverse) where there is no modal to host a spinner. */
+  const [localOp, setLocalOp] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const hasAudio = !!song.audioUrl;
@@ -102,6 +111,39 @@ export function SongOverflowMenu({ song }: { song: Song }) {
     setBusy(false);
   };
 
+  const stopPreview = () => {
+    stopPreviewRef.current?.();
+    stopPreviewRef.current = null;
+    setPreviewing(false);
+  };
+
+  const togglePreview = async () => {
+    if (previewing) {
+      stopPreview();
+      return;
+    }
+    if (!song.audioUrl) return;
+    try {
+      // Preview owns the transport: the bottom player and MIDI tab stop.
+      claimTransport("editor", stopPreview);
+      setPreviewing(true);
+      stopPreviewRef.current = await previewSpeed(song.audioUrl, speed / 100, () => {
+        stopPreviewRef.current = null;
+        setPreviewing(false);
+        releaseTransport("editor");
+      });
+    } catch (e: any) {
+      setErr(`Preview failed: ${e?.message || e}`);
+      setPreviewing(false);
+    }
+  };
+
+  /* Never leave a preview running when the modal or menu goes away. */
+  useEffect(() => () => stopPreview(), []);
+  useEffect(() => {
+    if (modal !== "speed") stopPreview();
+  }, [modal]);
+
   /** Render a REAL local derivative: decode -> process -> WAV -> save. */
   const renderLocal = async (label: string, type: Song["type"], fn: (b: AudioBuffer) => AudioBuffer | Promise<AudioBuffer>) => {
     if (!song.audioUrl) {
@@ -109,7 +151,9 @@ export function SongOverflowMenu({ song }: { song: Song }) {
       return;
     }
     setBusy(true);
+    setLocalOp(label);
     setErr(null);
+    notify(`${label}: decoding "${song.title}"…`, "info");
     try {
       const buf = await loadBuffer(song.audioUrl);
       const out = await fn(buf);
@@ -126,9 +170,13 @@ export function SongOverflowMenu({ song }: { song: Song }) {
       });
       addSong(res.asset);
       addHistoryEvent(`${label}: "${song.title}"`);
+      notify(`${label} — "${title}" is in your Library`, "success");
+      setLocalOp(null);
       close();
     } catch (e: any) {
       setErr(`${label} failed: ${e?.message || e}`);
+      notify(`${label} failed: ${e?.message || e}`, "error");
+      setLocalOp(null);
       setBusy(false);
     }
   };
@@ -189,6 +237,24 @@ export function SongOverflowMenu({ song }: { song: Song }) {
   };
 
   /** Local crossfade mix of the two songs; returns the saved row. */
+  /** Lyrics for the mashup, per the Song A / Song B / Both choice. */
+  const mashupLyrics = (second?: Song): string | undefined => {
+    const a = (song.lyrics || "").trim();
+    const b = (second?.lyrics || "").trim();
+    switch (lyricsSource) {
+      case "a":
+        return a || undefined;
+      case "b":
+        return b || undefined;
+      case "both":
+        // Concatenated with a section break so the LM reads them as two parts
+        // rather than one run-on verse.
+        return [a, b].filter(Boolean).join("\n\n") || undefined;
+      default:
+        return undefined;
+    }
+  };
+
   const mixTwo = async (): Promise<Song | null> => {
     const second = songs.find((s) => s.id === secondSourceId);
     if (!second) return null;
@@ -204,6 +270,7 @@ export function SongOverflowMenu({ song }: { song: Song }) {
       workspaceId: song.workspaceId,
       durationSeconds: Math.round(out.duration),
       styles: [...new Set([...song.styles, ...second.styles])],
+      lyrics: mashupLyrics(second),
     });
     addSong(res.asset);
     addHistoryEvent(`Mashup: "${song.title}" × "${second.title}"`);
@@ -224,7 +291,8 @@ export function SongOverflowMenu({ song }: { song: Song }) {
           title: `${mixed.title} (blended)`,
           prompt: text || [song.description, second?.description].filter(Boolean).join(" meets "),
           styles: mixed.styles,
-          instrumental: song.metadata.instrumental && !!second?.metadata.instrumental,
+          instrumental: lyricsSource === "none",
+          lyrics: mashupLyrics(second),
           duration: mixed.durationSeconds || dur,
           srcAudioPath: mixed.localAudioPath,
           coverStrength: 0.6,
@@ -290,8 +358,13 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         >
           🎹 Extract MIDI{midiRunning ? " (running…)" : needsFile}
         </button>
-        <button className="menu-item" disabled={!hasAudio} title={tip("Reverse")} onClick={() => renderLocal("Reversed", "reversed", reverseBuffer)}>
-          Reverse{needsAudio}
+        <button
+          className="menu-item"
+          disabled={!hasAudio || localOp === "Reversed"}
+          title={tip("Reverse")}
+          onClick={() => renderLocal("Reversed", "reversed", reverseBuffer)}
+        >
+          Reverse{localOp === "Reversed" ? " (reversing…)" : needsAudio}
         </button>
         <button className="menu-item" disabled={!hasAudio} title={tip("Adjust Speed")} onClick={() => open("speed")}>
           Adjust Speed{needsAudio}
@@ -443,6 +516,32 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         <div style={{ marginTop: 12 }}>
           <Slider label="Blend" value={blend} onChange={setBlend} formatValue={(v) => `${100 - v}/${v}`} />
         </div>
+
+        <div className="slider-row" style={{ gridTemplateColumns: "110px 1fr", alignItems: "center", marginTop: 12 }}>
+          <span className="field-label" style={{ marginBottom: 0 }}>Lyrics</span>
+          <div className="segmented" role="radiogroup" aria-label="Lyrics source">
+            {([
+              ["a", "Song A"],
+              ["b", "Song B"],
+              ["both", "Both"],
+              ["none", "Instrumental"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                role="radio"
+                aria-checked={lyricsSource === id}
+                className={lyricsSource === id ? "active" : ""}
+                onClick={() => setLyricsSource(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="inline-hint">
+          Applies to the saved mashup row, and to the words ACE-Step re-performs if you smooth it. "Both" stacks A
+          then B with a section break.
+        </p>
         <label className="field-label" htmlFor="mashup-prompt" style={{ marginTop: 10 }}>
           Style for the smoothed version (optional)
         </label>
@@ -537,8 +636,47 @@ export function SongOverflowMenu({ song }: { song: Song }) {
           </>
         }
       >
-        <Slider label="Speed" value={speed} min={50} max={200} onChange={setSpeed} formatValue={(v) => `${(v / 100).toFixed(2)}x`} />
-        <p className="inline-hint">Pitch moves with speed, like a turntable.</p>
+        <Slider
+          label="Speed"
+          value={speed}
+          min={50}
+          max={200}
+          onChange={(v) => {
+            // Changing the rate mid-preview would need a re-schedule; stop and
+            // let the user re-listen rather than play something stale.
+            if (previewing) stopPreview();
+            setSpeed(v);
+          }}
+          formatValue={(v) => `${(v / 100).toFixed(2)}x`}
+        />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+          <Button variant="ghost" disabled={!hasAudio} onClick={togglePreview}>
+            {previewing ? "⏹ Stop preview" : "▶ Preview 12s"}
+          </Button>
+          <span className="inline-hint">Hear it before you commit — nothing is saved until "Create version".</span>
+        </div>
+
+        <div className="slider-row" style={{ gridTemplateColumns: "110px 1fr", alignItems: "center", marginTop: 12 }}>
+          <span className="field-label" style={{ marginBottom: 0 }}>Pitch</span>
+          <div className="segmented" role="radiogroup" aria-label="Pitch behaviour">
+            <button role="radio" aria-checked className="active">
+              Follows speed
+            </button>
+            <button
+              role="radio"
+              aria-checked={false}
+              disabled
+              title="Not implemented: preserving pitch needs time-stretching (a phase vocoder), not a resample."
+            >
+              Keep pitch
+            </button>
+          </div>
+        </div>
+        <p className="inline-hint">
+          Speed is a resample, so pitch moves with it like a turntable. Keeping the original pitch means real
+          time-stretching (a phase vocoder) — that is a separate piece of DSP work, so the option is shown disabled
+          rather than faked.
+        </p>
         {err && <p className="inline-error">{err}</p>}
       </Modal>
 
@@ -581,8 +719,8 @@ export function SongOverflowMenu({ song }: { song: Song }) {
                 setBusy(true);
                 try {
                   const res = await api.exportSongs([song.id]);
-                  addHistoryEvent(`Exported "${song.title}" to ${res.savedTo}`);
-                  notify(`Manifest written to ${res.savedTo}`, "success");
+                  addHistoryEvent(`Exported "${song.title}"`);
+                  notify(`Downloaded ${res.filename}`, "success");
                   close();
                 } catch (e: any) {
                   setErr(`Export failed: ${e?.message || e}`);

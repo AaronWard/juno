@@ -1302,8 +1302,14 @@ select {
   align-items: center;
   gap: 8px;
 }
+/* The ramp is painted ONCE across the full track and the fill clips it, so the
+   colour at a given VRAM percentage is identical in the narrow sidebar widget
+   and the wide Settings card. The previous rule put the gradient on the fill
+   with `background-size: 400px 100%` and the default `repeat`, so any bar wider
+   than 400px tiled the ramp — green→red, then green→yellow again. */
 .vram-bar {
   display: block;
+  position: relative;
   height: 4px;
   border-radius: 999px;
   background: var(--color-bg-pill);
@@ -1313,11 +1319,22 @@ select {
 .vram-bar.wide {
   flex: 1;
 }
+.vram-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--color-success), var(--color-warning) 70%, var(--color-danger));
+  opacity: 0.28;
+}
 .vram-bar > span {
   display: block;
+  position: absolute;
+  inset: 0 auto 0 0;
   height: 100%;
-  background: linear-gradient(90deg, var(--color-success), var(--color-warning) 75%, var(--color-danger));
-  background-size: 400px 100%;
+  background: linear-gradient(90deg, var(--color-success), var(--color-warning) 70%, var(--color-danger));
+  background-repeat: no-repeat;
+  /* Stretch the ramp over the TRACK, not over the fill, then clip. */
+  background-size: var(--vram-track-width, 100%) 100%;
   transition: width 0.4s ease;
 }
 .engine-mini {
@@ -1839,4 +1856,82 @@ button.chip {
 }
 .cover-card .inline-hint {
   margin: 0 0 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Round-1 fixes: sidebar engine popover + collapsed sidebar geometry   */
+/* ------------------------------------------------------------------ */
+
+/* The Create panel used to render a second copy of the engine card. The
+   sidebar mini-widget is now the only one, and hovering expands it into the
+   full card (idle-unload time, VRAM, Load / Unload). */
+.engine-mini-wrap {
+  position: relative;
+}
+.engine-mini-pop {
+  position: absolute;
+  bottom: 0;
+  left: calc(100% + 10px);
+  width: 300px;
+  z-index: 60;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-6px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+  pointer-events: none;
+}
+.engine-mini-pop .engine-card {
+  background: var(--color-bg-elevated, var(--color-bg-sidebar));
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.engine-mini-wrap:hover .engine-mini-pop,
+.engine-mini-wrap:focus-within .engine-mini-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+/* Collapsed sidebar: square hit target so glyphs sit dead centre, and a
+   genuinely circular hover on the collapse/expand chevron. */
+.app.sidebar-collapsed .nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  margin: 0 auto;
+  border-radius: 10px;
+}
+.app.sidebar-collapsed .nav-item .nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  line-height: 1;
+  margin: 0;
+}
+.sidebar-collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  line-height: 1;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.sidebar-collapse-toggle:hover {
+  background: var(--color-bg-pill);
+  color: var(--color-text-primary);
 }

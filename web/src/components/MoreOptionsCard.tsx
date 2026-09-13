@@ -11,6 +11,12 @@ interface Props {
   exclude: string;
   onExclude: (v: string) => void;
   cfgDisabled: boolean;
+  /** Approximate song length in seconds, or null for Auto (the model picks). */
+  duration: number | null;
+  onDuration: (v: number | null) => void;
+  /** Covers/repaints run at the source's length — the control is locked then. */
+  durationLocked?: boolean;
+  durationLockedNote?: string;
 }
 
 /** More Options card (DESIGN_DOC §9): Vocal Gender, Weirdness, Style
@@ -28,6 +34,10 @@ export function MoreOptionsCard({
   exclude,
   onExclude,
   cfgDisabled,
+  duration,
+  onDuration,
+  durationLocked = false,
+  durationLockedNote,
 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
 
@@ -53,6 +63,52 @@ export function MoreOptionsCard({
                 </button>
               ))}
             </div>
+          </div>
+
+          <div>
+            <div className="slider-row" style={{ gridTemplateColumns: "110px 1fr", alignItems: "center" }}>
+              <span className="field-label" style={{ marginBottom: 0 }}>Length</span>
+              <div className="segmented" role="radiogroup" aria-label="Song length mode">
+                <button
+                  role="radio"
+                  aria-checked={duration === null}
+                  className={duration === null ? "active" : ""}
+                  disabled={durationLocked}
+                  onClick={() => onDuration(null)}
+                >
+                  Auto
+                </button>
+                <button
+                  role="radio"
+                  aria-checked={duration !== null}
+                  className={duration !== null ? "active" : ""}
+                  disabled={durationLocked}
+                  onClick={() => onDuration(duration ?? 120)}
+                >
+                  Set
+                </button>
+              </div>
+            </div>
+            {duration !== null && !durationLocked && (
+              <div style={{ marginTop: 10 }}>
+                <Slider
+                  label="Approx. length"
+                  value={duration}
+                  min={20}
+                  max={360}
+                  step={5}
+                  onChange={onDuration}
+                  formatValue={(v) => `${Math.floor(v / 60)}:${String(Math.round(v) % 60).padStart(2, "0")}`}
+                />
+              </div>
+            )}
+            <p className="inline-hint" style={{ marginTop: 6 }}>
+              {durationLocked
+                ? durationLockedNote
+                : duration === null
+                  ? "Auto lets the 5Hz LM choose a length that fits your prompt and lyrics — best when a long prompt was being crammed into a fixed 2:00."
+                  : "ACE-Step treats this as a target, not an exact cut. Supported range is roughly 10 s – 10 min."}
+            </p>
           </div>
 
           <Slider label="Weirdness" value={weirdness} onChange={onWeirdness} />

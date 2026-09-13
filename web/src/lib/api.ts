@@ -153,6 +153,43 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** POST to /api/export and hand the resulting zip to the browser as a download.
+ *  The proxy sets Content-Disposition, but we go via a blob so a failed export
+ *  surfaces as a thrown error instead of navigating away to an error page. */
+async function downloadExport(body: Record<string, unknown>, fallbackName: string): Promise<{ ok: true; filename: string; bytes: number }> {
+  const res = await fetch("/api/export", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `Export failed (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j?.error) detail = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
+  }
+
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || fallbackName;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke late: Safari cancels an in-flight download if the URL dies too soon.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return { ok: true, filename, bytes: blob.size };
+}
+
 export const api = {
   health: () => json<HealthResponse>("/api/health"),
 
@@ -214,7 +251,14 @@ export const api = {
   midiRevert: (id: string) => json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/edit`, { method: "DELETE" }),
   midiRename: (id: string, title: string) =>
     json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
-  midiRetry: (id: string) => json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/retry`, { method: "POST" }),
+  /** Re-transcribe from the stored source audio — no re-upload. Optionally
+   *  with a different model size or instrument filter. */
+  midiRetry: (id: string, opts?: { modelSize?: string; instruments?: string[] }) =>
+    json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/retry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(opts || {}),
+    }),
   midiDelete: (id: string) => json<{ ok: boolean }>(`/api/midi/${id}`, { method: "DELETE" }),
 
   saveLyrics: (text: string, title?: string) =>
@@ -233,11 +277,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(p),
     }),
-  exportProject: (projectId: string, songIds: string[]) =>
-    json<{ ok: boolean; savedTo: string }>("/api/export", {
-      method: "POST",
-      body: JSON.stringify({ projectId, songIds }),
-    }),
+  exportProject: (projectId: string, songIds: string[], filename?: string) =>
+    downloadExport({ projectId, songIds }, filename || "juno-project.zip"),
 
   /** Submit a generation task. When ACE-Step rejects the task the proxy
    *  still records a failed Song row and returns it with ok:false. Only a
@@ -343,11 +384,10 @@ export const api = {
   deleteSong: (id: string) =>
     json<{ ok: boolean }>(`/api/library/song/${id}`, { method: "DELETE" }),
 
-  exportSongs: (songIds: string[]) =>
-    json<{ ok: boolean; manifest: unknown; savedTo: string }>("/api/export", {
-      method: "POST",
-      body: JSON.stringify({ songIds }),
-    }),
+  /** Export downloads a zip (audio + manifest.json). Resolves once the browser
+   *  has been handed the file. */
+  exportSongs: (songIds: string[], filename?: string) =>
+    downloadExport({ songIds }, filename || "juno-export.zip"),
 
   upload: async (file: File, meta?: UploadMeta) => {
     const form = new FormData();

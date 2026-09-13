@@ -23,7 +23,6 @@ import { MoreOptionsCard } from "./MoreOptionsCard";
 import { Slider } from "./Slider";
 import { UploadModal } from "./UploadModal";
 import { Modal } from "./Modal";
-import { ModelStatus } from "./ModelStatus";
 
 type CreateStatus =
   | "idle"
@@ -65,6 +64,8 @@ export function CreatePanel() {
   const [referenceAudioPath, setReferenceAudioPath] = useState<string | undefined>();
   const [inspirationTitle, setInspirationTitle] = useState<string | undefined>();
   const [coverSource, setCoverSource] = useState<{ path: string; title: string; duration?: number } | undefined>();
+  /** null = Auto: omit a target length and let ACE-Step's LM choose. */
+  const [duration, setDuration] = useState<number | null>(null);
   /** Cover controls — see docs/COVER.md for what each one maps to. */
   const [sourceFidelity, setSourceFidelity] = useState(45);
   const [coverStyleInfluence, setCoverStyleInfluence] = useState(50);
@@ -151,8 +152,12 @@ export function CreatePanel() {
         exclude: exclude || undefined,
         title: title || undefined,
         workspaceId: activeWorkspaceId,
-        // A cover runs at the source's length; only fresh songs use the default.
-        duration: coverSource?.duration ? Math.round(coverSource.duration) : 120,
+        // A cover runs at the source's length (ACE-Step locks it to the source
+        // audio anyway); otherwise honour the Length control, where Auto sends
+        // nothing and ACE-Step's -1 auto sentinel applies.
+        duration: coverSource?.duration
+          ? Math.round(coverSource.duration)
+          : duration ?? undefined,
         srcAudioPath: coverSource?.path,
         referenceAudioPath,
         sourceSongId,
@@ -408,6 +413,14 @@ export function CreatePanel() {
             exclude={exclude}
             onExclude={setExclude}
             cfgDisabled={!preset.cfgEnabled}
+            duration={duration}
+            onDuration={setDuration}
+            durationLocked={!!coverSource}
+            durationLockedNote={
+              coverSource?.duration
+                ? `Covers run at the source's length (${Math.round(coverSource.duration)}s) — ACE-Step locks duration to the source audio for cover/repaint tasks.`
+                : "Covers run at the source song's length."
+            }
           />
           <div>
             <label className="field-label" htmlFor="song-title">♪ Song Title (Optional)</label>
@@ -462,7 +475,6 @@ export function CreatePanel() {
         </p>
       )}
 
-      <ModelStatus />
 
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
 

@@ -10,12 +10,19 @@ import { modelManager, saveLocalCopy } from "./modelManager";
 import { addHistory, loadDb, mutateDb, purgeExpiredTrash } from "./storage";
 import { buildAcePayload, resolvePreset } from "./tasks";
 import { GenerateRequest, GenerationTask, JunoSettings, MidiRecord, Song, StudioProject, TaskType } from "./types";
-import { midiSourceUpload, upload } from "./uploads";
+import { decodeUploadName, midiSourceUpload, upload } from "./uploads";
+import { safeEntryName, ZipWriter } from "./zip";
 
 export const router = express.Router();
 
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const now = () => new Date().toISOString();
+
+/** Display title for an uploaded file: real UTF-8 name, extension stripped. */
+function titleFromUpload(originalname: string): string {
+  const clean = decodeUploadName(originalname);
+  return path.basename(clean, path.extname(clean));
+}
 
 const SONG_TYPES: Song["type"][] = [
   "song", "upload", "cover", "remix", "extended",
@@ -204,7 +211,9 @@ router.post("/generate", (req: Request, res: Response) => {
     model: "juno-xl-quality",
     aceModel: "acestep-v15-xl-sft",
     type: form.songType && SONG_TYPES.includes(form.songType) ? form.songType : typeForTask(form.taskType),
-    durationSeconds: form.duration ?? 120,
+    // 0 = "not known yet"; the real length is written back when the audio
+    // lands (see modelManager). Never claim 120 s for an auto-length song.
+    durationSeconds: form.duration && form.duration > 0 ? form.duration : 0,
     playlistIds: [],
     workspaceId: form.workspaceId,
     liked: false,
@@ -366,7 +375,9 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   const ts = now();
   const song: Song = {
     id: newId(type === "upload" ? "upl" : "song"),
-    title: b.title || path.basename(file.originalname, path.extname(file.originalname)),
+    // multer hands us a latin-1-decoded filename; recover the real UTF-8 one so
+    // non-English titles are not stored mojibake'd.
+    title: b.title || titleFromUpload(file.originalname),
     description: b.description || "Uploaded audio",
     lyrics: b.lyrics || undefined,
     styles,
@@ -391,7 +402,7 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
   };
   mutateDb((db) => {
     db.songs.unshift(song);
-    addHistory(db, type === "upload" ? `Uploaded "${file.originalname}"` : `Saved processed audio "${song.title}"`);
+    addHistory(db, type === "upload" ? `Uploaded "${decodeUploadName(file.originalname)}"` : `Saved processed audio "${song.title}"`);
   });
   res.json({ ok: true, asset: song });
 });
@@ -452,7 +463,7 @@ router.post("/midi", midiSourceUpload.single("file"), (req: Request, res: Respon
   if (file) {
     sourceAudioPath = file.path;
     sourceAudioUrl = `/upload-audio/${path.relative(config.uploadDir, file.path).split(path.sep).join("/")}`;
-    title = b.title || path.basename(file.originalname, path.extname(file.originalname));
+    title = b.title || titleFromUpload(file.originalname);
   } else {
     const song = db.songs.find((s) => s.id === b.songId);
     if (!song) {
@@ -492,10 +503,29 @@ router.post("/midi", midiSourceUpload.single("file"), (req: Request, res: Respon
   res.json({ ok: true, item: midiView(rec) });
 });
 
+/** Re-run a transcription against the SAME stored source audio. No re-upload:
+ *  `sourceAudioPath` is persisted on the record. Optionally with a different
+ *  model size (gating is per-repo, so a 401 on `medium` is often just the wrong
+ *  size being requested) or a different instrument filter. */
 router.post("/midi/:id/retry", (req: Request, res: Response) => {
+  const b = (req.body || {}) as Record<string, any>;
   const r = mutateDb((d) => {
     const x = d.midi.find((m) => m.id === req.params.id);
-    if (x) Object.assign(x, { status: "queued", progress: 0, stage: "Queued", error: undefined, updatedAt: now() });
+    if (!x) return undefined;
+
+    if (["small", "medium", "large"].includes(b.modelSize)) x.modelSize = b.modelSize;
+    if (Array.isArray(b.instruments)) {
+      x.instruments = b.instruments.map(String).filter((i: string) => MIDI_INSTRUMENTS.includes(i));
+    }
+    // A re-transcription supersedes the previous result; edits are kept as a
+    // sibling file and are NOT touched here.
+    Object.assign(x, {
+      status: "queued",
+      progress: 0,
+      stage: "Queued",
+      error: undefined,
+      updatedAt: now(),
+    });
     return x;
   });
   if (!r) {
@@ -844,7 +874,15 @@ router.delete("/library/song/:id", (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-router.post("/export", (req: Request, res: Response) => {
+/** Export as a real download.
+ *
+ *  Previously this only wrote a manifest JSON to /outputs/exports and returned
+ *  its path, so the UI could do nothing but show "Manifest written to ...".
+ *  Now it streams a zip containing every selected song's audio plus the
+ *  manifest. The manifest is still written to disk as before, so nothing that
+ *  depended on that file breaks.
+ */
+router.post("/export", async (req: Request, res: Response) => {
   const ids: string[] = req.body?.songIds || [];
   const db = loadDb();
   const songs = db.songs.filter((s) => ids.includes(s.id));
@@ -855,10 +893,42 @@ router.post("/export", (req: Request, res: Response) => {
     project,
     songs: songs.map((s) => ({ ...s, audioFile: s.localAudioPath ? path.basename(s.localAudioPath) : null })),
   };
+
   const outDir = path.join(config.outputDir, "exports");
   fs.mkdirSync(outDir, { recursive: true });
-  const file = path.join(outDir, `juno-export-${Date.now()}.json`);
+  const stamp = Date.now();
+  const file = path.join(outDir, `juno-export-${stamp}.json`);
   fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
   mutateDb((d) => addHistory(d, project ? `Exported Studio project "${project.name}"` : `Exported ${songs.length} item(s)`));
-  res.json({ ok: true, manifest, savedTo: file });
+
+  // Callers that still want the old JSON-only behaviour can ask for it.
+  if (req.body?.manifestOnly) {
+    res.json({ ok: true, manifest, savedTo: file });
+    return;
+  }
+
+  const base = safeEntryName(project ? project.name : songs.length === 1 ? songs[0].title : "juno-export", "juno-export");
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${base.replace(/"/g, "")}-${stamp}.zip"`);
+
+  const zip = new ZipWriter(res);
+  try {
+    await zip.addBuffer("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf8"));
+    const used = new Set<string>();
+    for (const s of songs) {
+      if (!s.localAudioPath || !fs.existsSync(s.localAudioPath)) continue;
+      const ext = path.extname(s.localAudioPath) || ".wav";
+      let entry = `audio/${safeEntryName(s.title, s.id)}${ext}`;
+      // Two songs can share a title; never silently drop one.
+      if (used.has(entry)) entry = `audio/${safeEntryName(s.title, s.id)}_${s.id}${ext}`;
+      used.add(entry);
+      await zip.addFile(entry, s.localAudioPath);
+    }
+    await zip.finish();
+    res.end();
+  } catch (e: any) {
+    console.error("[juno-proxy] export failed:", e?.message || e);
+    // Headers are already sent, so the only honest signal is a truncated body.
+    res.destroy();
+  }
 });

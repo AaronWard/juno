@@ -78,7 +78,13 @@ export function buildAcePayload(req: GenerateRequest, preset: Preset): Record<st
     task_type: taskType,
     prompt,
     lyrics,
-    audio_duration: req.duration ?? 120,
+    // -1 is ACE-Step's documented auto sentinel: inference.py's generate_music
+    // docstring says "If <0 or None, model chooses automatically. 10 ~ 600",
+    // api_routes.py defaults the field to -1, and job_generation_setup.py maps
+    // any value <= 0 onto _AUTO_DURATION_SENTINEL. Verified at the pinned
+    // commit ca1e85f. Juno used to hard-code 120 here, which is why every song
+    // came out exactly 2:00.
+    audio_duration: req.duration && req.duration > 0 ? req.duration : -1,
     inference_steps: preset.inferenceSteps,
     shift: preset.shift,
     infer_method: preset.inferMethod,

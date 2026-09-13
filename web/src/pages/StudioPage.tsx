@@ -276,7 +276,7 @@ export function StudioPage() {
               try {
                 const songIds = [...new Set(clips.map((c) => c.songId).filter(Boolean))] as string[];
                 const res = await api.exportProject(id, songIds);
-                setNotice(`Exported the arrangement manifest to ${res.savedTo}`);
+                setNotice(`Downloaded ${res.filename} (arrangement manifest + audio)`);
               } catch (e: any) {
                 setNotice(`Export failed: ${e?.message || e}`);
               }

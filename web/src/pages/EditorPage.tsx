@@ -200,7 +200,7 @@ export function EditorPage({ songId }: { songId: string }) {
               setBusy("export");
               try {
                 const res = await api.exportSongs([song.id]);
-                setNotice(`Exported to ${res.savedTo}`);
+                setNotice(`Downloaded ${res.filename}`);
                 addHistoryEvent(`Exported "${song.title}"`);
               } catch (e: any) {
                 setNotice(`Export failed: ${e?.message || e}`);

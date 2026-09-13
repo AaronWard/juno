@@ -18,6 +18,7 @@ import { Dropdown } from "../components/Dropdown";
 import { FallingNotesView } from "../components/midi/FallingNotesView";
 import { EditTool, PianoRollEditor } from "../components/midi/PianoRollEditor";
 import { MidiDoc, MNote, MTrack, parseMidi, serializeMidi, SNAP_OPTIONS, SnapValue, TRACK_COLORS } from "../lib/midiModel";
+import { claimTransport, releaseTransport } from "../lib/transport";
 import { MidiPlayer, renderOffline } from "../lib/midiSynth";
 import { bufferToFile, downloadUrl } from "../lib/dsp";
 import { fmtDuration, fmtRelative } from "../lib/format";
@@ -118,6 +119,59 @@ function MidiEngineLine() {
   );
 }
 
+/** Retry / re-transcribe against the STORED source audio — never a re-upload.
+ *  The size picker matters because Hugging Face gating is per-repo: approval
+ *  for muscriptor-large does not grant medium, and that 401 looks like a bug
+ *  until you can switch sizes from the row that failed. */
+function RetranscribeControls({
+  item,
+  label = "Retry",
+  onDone,
+}: {
+  item: MidiItem;
+  label?: string;
+  onDone?: () => void;
+}) {
+  const { upsertMidi, notify } = useJuno();
+  const [size, setSize] = useState(item.modelSize || "medium");
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await api.midiRetry(item.id, { modelSize: size });
+      upsertMidi(r.item);
+      onDone?.();
+    } catch (e: any) {
+      notify(e?.message || "Could not start the transcription", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <select
+        className="text-input"
+        style={{ width: "auto" }}
+        value={size}
+        onChange={(e) => setSize(e.target.value)}
+        aria-label="MuScriptor model size"
+        title="Model size to transcribe with"
+      >
+        {["small", "medium", "large"].map((sz) => (
+          <option key={sz} value={sz}>
+            {sz}
+          </option>
+        ))}
+      </select>
+      <Button loading={busy} onClick={run}>
+        {label}
+      </Button>
+    </div>
+  );
+}
+
 function MidiListItem({ item, active, onOpen }: { item: MidiItem; active: boolean; onOpen: () => void }) {
   const { upsertMidi, notify } = useJuno();
   const running = item.status === "queued" || item.status === "starting" || item.status === "running";
@@ -147,19 +201,7 @@ function MidiListItem({ item, active, onOpen }: { item: MidiItem; active: boolea
         {item.status === "failed" && <span className="inline-error midi-item-error">{item.error}</span>}
         {!running && item.status !== "failed" && <span className="midi-item-meta">{fmtRelative(item.createdAt)}</span>}
       </button>
-      {item.status === "failed" && (
-        <Button
-          variant="ghost"
-          onClick={() =>
-            api
-              .midiRetry(item.id)
-              .then((r) => upsertMidi(r.item))
-              .catch((e) => notify(e.message, "error"))
-          }
-        >
-          Retry
-        </Button>
-      )}
+      {item.status === "failed" && <RetranscribeControls item={item} />}
     </div>
   );
 }
@@ -365,6 +407,9 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
   const [audioOn, setAudioOn] = useState(false);
   const [audioVol, setAudioVol] = useState(0.7);
   const [audioState, setAudioState] = useState<"none" | "loading" | "ready" | "error">("none");
+  /** Milliseconds the recording is shifted against the MIDI, for A/B listening. */
+  const [audioOffset, setAudioOffset] = useState(0);
+  const [retranscribeOpen, setRetranscribeOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -436,12 +481,28 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
   const togglePlay = useCallback(() => {
     if (player.playing) {
       player.pause();
+      releaseTransport("midi");
       setPlaying(false);
     } else {
+      // Claim before play(): this pauses the bottom player, so the library
+      // track and the transcription can never overlap.
+      claimTransport("midi", () => {
+        player.pause();
+        setPlaying(false);
+      });
       void player.play();
       setPlaying(true);
     }
   }, [player]);
+
+  /* Never leave the MIDI transport claimed behind us. */
+  useEffect(() => () => releaseTransport("midi"), []);
+
+  /* A/B alignment nudge against the original recording. */
+  useEffect(() => {
+    player.setAudioOffset(audioOffset / 1000);
+    if (player.playing) player.seek(player.position);
+  }, [player, audioOffset]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -606,12 +667,30 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
           <>
             <p className="inline-error">{item.error || "Transcription failed."}</p>
             <div style={{ display: "flex", gap: 8 }}>
-              <Button onClick={() => api.midiRetry(item.id).then((r) => upsertMidi(r.item))}>Retry</Button>
+              <RetranscribeControls item={item} />
               <Button variant="danger" onClick={() => setConfirmDelete(true)}>Delete</Button>
             </div>
           </>
         )}
         <DeleteModal open={confirmDelete} title={item.title} onCancel={() => setConfirmDelete(false)} onConfirm={doDelete} />
+      <Modal
+        title="Re-transcribe this audio"
+        open={retranscribeOpen}
+        onClose={() => setRetranscribeOpen(false)}
+        footer={<Button variant="ghost" onClick={() => setRetranscribeOpen(false)}>Cancel</Button>}
+      >
+        <p>
+          Runs MuScriptor again over the audio Juno already stored for this item — no re-upload needed. Pick a
+          different model size if you want a more (or less) detailed transcription.
+        </p>
+        <p className="inline-hint">
+          The new transcription replaces this one. Any edits you saved are kept as a separate file and are not
+          overwritten.
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <RetranscribeControls item={item} label="Re-transcribe" onDone={() => setRetranscribeOpen(false)} />
+        </div>
+      </Modal>
       </div>
     );
   }
@@ -664,6 +743,11 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
                 : []),
               { id: "render", label: busy === "render" ? "Rendering…" : "♪ Render to WAV → Library", disabled: !!busy, onSelect: renderWav },
               ...(item.edited || dirty ? [{ id: "revert", label: "↺ Revert to original transcription", onSelect: revert }] : []),
+              {
+                id: "retranscribe",
+                label: "⟳ Re-transcribe (choose model size)",
+                onSelect: () => setRetranscribeOpen(true),
+              },
               { id: "src", label: "Open source song", disabled: !item.sourceSongId, onSelect: () => navigate(`/editor/${item.sourceSongId}`) },
               { id: "del", label: "🗑 Delete", onSelect: () => setConfirmDelete(true) },
             ]}
@@ -696,6 +780,31 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
           <input type="range" min={0} max={100} value={Math.round(audioVol * 100)} disabled={!audioOn} onChange={(e) => setAudioVol(Number(e.target.value) / 100)} aria-label="Original audio volume" />
           {audioState === "loading" && <span className="spinner" aria-hidden="true" />}
           {audioState === "error" && <span className="inline-error">!</span>}
+        </label>
+        <label
+          className="mini-slider"
+          title="Nudge the recording against the MIDI. MuScriptor's onset delay and beat quantization can offset the two."
+        >
+          Align
+          <input
+            type="range"
+            min={-500}
+            max={500}
+            step={10}
+            value={audioOffset}
+            disabled={!audioOn}
+            onChange={(e) => setAudioOffset(Number(e.target.value))}
+            aria-label="Original audio alignment offset in milliseconds"
+          />
+          <span className="inline-hint" style={{ minWidth: 52, textAlign: "right" }}>
+            {audioOffset > 0 ? "+" : ""}
+            {audioOffset} ms
+          </span>
+          {audioOffset !== 0 && (
+            <Button variant="icon" label="Reset alignment" onClick={() => setAudioOffset(0)}>
+              ↺
+            </Button>
+          )}
         </label>
         <div className="segmented" role="tablist" aria-label="View">
           <button role="tab" aria-selected={view === "play"} className={view === "play" ? "active" : ""} onClick={() => setView("play")}>
