@@ -9,6 +9,7 @@ import { SongOverflowMenu } from "./SongOverflowMenu";
 import { NotesModal } from "./NotesModal";
 import { presetLabel } from "../data/modelPresets";
 import { useQuickDelete } from "../lib/useQuickDelete";
+import { OPERATION_LABEL } from "../lib/lineage";
 
 const TYPE_LABEL: Record<Song["type"], string> = {
   song: "Song",
@@ -32,12 +33,23 @@ export function SongRow({
   showPlayCount,
   selected,
   onSelect,
+  depth = 0,
+  childCount = 0,
+  descendantCount = 0,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   song: Song;
   queueIds: string[];
   showPlayCount?: boolean;
   selected?: boolean;
   onSelect?: () => void;
+  /** Tree view only: nesting level, 0 = root. */
+  depth?: number;
+  childCount?: number;
+  descendantCount?: number;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, deleteForever, retrySong, midiItems, navigate } =
     useJuno();
@@ -58,6 +70,7 @@ export function SongRow({
     isCurrent && "playing",
     selected && "selected",
     song.trashed && "trashed",
+    depth > 0 && "derived",
   ]
     .filter(Boolean)
     .join(" ");
@@ -73,7 +86,28 @@ export function SongRow({
   };
 
   return (
-    <div className={rowClass} onClick={onSelect}>
+    <div
+      className={rowClass}
+      onClick={onSelect}
+      // Indent rather than nesting <div>s: keeps every row a direct sibling so
+      // the flat and tree views share one layout and one set of CSS rules.
+      style={depth > 0 ? { paddingLeft: 12 + depth * 22 } : undefined}
+    >
+      {depth > 0 && <span className="lineage-spine" aria-hidden="true" />}
+      {childCount > 0 && (
+        <button
+          className={`lineage-toggle${collapsed ? " collapsed" : ""}`}
+          aria-label={collapsed ? `Expand ${descendantCount} derived` : "Collapse"}
+          aria-expanded={!collapsed}
+          title={collapsed ? `${descendantCount} derived from this` : "Collapse branch"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapse?.();
+          }}
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
+      )}
       <button
         className="song-thumb"
         style={{ background: coverGradient(song.id) }}
@@ -99,7 +133,12 @@ export function SongRow({
         <div className="song-title-row">
           <span className="song-title">{song.title}</span>
           <Badge tone="accent">{presetLabel(song.model)}</Badge>
-          {song.type !== "song" && <Badge>{TYPE_LABEL[song.type]}</Badge>}
+          {song.operation && song.operation !== "generate" && song.operation !== "upload" ? (
+            <Badge>{OPERATION_LABEL[song.operation]}</Badge>
+          ) : (
+            song.type !== "song" && <Badge>{TYPE_LABEL[song.type]}</Badge>
+          )}
+          {collapsed && descendantCount > 0 && <Badge tone="accent">+{descendantCount}</Badge>}
           {song.metadata.instrumental && <Badge>Instrumental</Badge>}
           {song.public && <Badge tone="success">Public</Badge>}
           {processing && <Badge tone="warning">Processing</Badge>}

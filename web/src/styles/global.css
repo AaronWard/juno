@@ -1935,3 +1935,43 @@ button.chip {
   background: var(--color-bg-pill);
   color: var(--color-text-primary);
 }
+
+/* ------------------------------------------------------------------ */
+/* Library lineage tree                                                */
+/* ------------------------------------------------------------------ */
+
+/* Derived rows are indented siblings, not nested containers, so the tree and
+   flat views share one layout. */
+.song-row.derived {
+  position: relative;
+}
+.song-row.derived .lineage-spine {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -10px;
+  background: var(--color-border-subtle);
+  border-radius: 2px;
+}
+.lineage-toggle {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+.lineage-toggle:hover {
+  background: var(--color-bg-pill);
+  color: var(--color-text-primary);
+}

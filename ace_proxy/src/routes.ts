@@ -9,7 +9,7 @@ import { midiManager, MIDI_INSTRUMENTS } from "./midi";
 import { modelManager, saveLocalCopy } from "./modelManager";
 import { addHistory, loadDb, mutateDb, purgeExpiredTrash } from "./storage";
 import { buildAcePayload, resolvePreset } from "./tasks";
-import { GenerateRequest, GenerationTask, JunoSettings, MidiRecord, Song, StudioProject, TaskType } from "./types";
+import { GenerateRequest, GenerationTask, SongOperation, JunoSettings, MidiRecord, Song, StudioProject, TaskType } from "./types";
 import { decodeUploadName, midiSourceUpload, upload } from "./uploads";
 import { safeEntryName, ZipWriter } from "./zip";
 
@@ -17,6 +17,43 @@ export const router = express.Router();
 
 const newId = (prefix: string) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const now = () => new Date().toISOString();
+
+/** Map a generation request onto a lineage operation. */
+function lineageFor(form: GenerateRequest): Partial<Song> {
+  const OP: Record<string, SongOperation> = {
+    cover: "cover",
+    "cover-nofsq": "cover",
+    repaint: form.songType === "extended" ? "extend" : "replace-section",
+    lego: "inspiration",
+    extract: "inspiration",
+    complete: "extend",
+    text2music: "generate",
+  };
+  const operation = (form.songType === "mashup" ? "mashup" : OP[form.taskType || "text2music"]) || "generate";
+  const ids = [form.sourceSongId].filter((x): x is string => !!x);
+  if (ids.length === 0) return { operation, sourceIds: [] };
+  const parent = loadDb().songs.find((s) => s.id === ids[0]);
+  return {
+    operation,
+    sourceIds: ids,
+    parentId: parent?.id,
+    rootId: parent ? parent.rootId || parent.id : undefined,
+  };
+}
+
+/** Fill in lineage for a newly created song. `sources` are ids of every input
+ *  (two for a mashup); the first is treated as the parent. */
+function withLineage(song: Song, operation: SongOperation, sources: (string | undefined)[]): Song {
+  const db = loadDb();
+  const ids = sources.filter((x): x is string => !!x);
+  const parent = ids[0] ? db.songs.find((s) => s.id === ids[0]) : undefined;
+  song.operation = operation;
+  song.sourceIds = ids;
+  song.parentId = parent?.id;
+  // A root is its own root, so grouping never needs a walk.
+  song.rootId = parent ? parent.rootId || parent.id : song.id;
+  return song;
+}
 
 /** Display title for an uploaded file: real UTF-8 name, extension stripped. */
 function titleFromUpload(originalname: string): string {
@@ -224,6 +261,7 @@ router.post("/generate", (req: Request, res: Response) => {
     createdAt: ts,
     updatedAt: ts,
     sourceSongId: form.sourceSongId,
+    ...lineageFor(form),
     generationRequest: form,
     metadata: {
       vocalGender: form.vocalGender,
@@ -400,6 +438,24 @@ router.post("/upload", upload.single("file"), (req: Request, res: Response) => {
     generationStatus: "idle",
     metadata: { weirdness: 50, styleInfluence: 50, instrumental: false },
   };
+  // Local DSP results (reverse, speed, crop, sample, mashup mix, MIDI render)
+  // all come through here, so this is where their lineage is recorded. The
+  // client sends `operation`; fall back to the legacy type mapping.
+  const LOCAL_OP: Record<string, SongOperation> = {
+    reversed: "reverse",
+    remix: "speed",
+    cropped: "crop",
+    sample: "sample",
+    mashup: "mashup",
+    replacement: "replace-section",
+    upload: "upload",
+  };
+  const extraSources: string[] = Array.isArray(b.sourceIds) ? b.sourceIds.map(String) : [];
+  withLineage(song, (b.operation as SongOperation) || LOCAL_OP[type] || "upload", [
+    b.sourceSongId || undefined,
+    ...extraSources,
+  ]);
+
   mutateDb((db) => {
     db.songs.unshift(song);
     addHistory(db, type === "upload" ? `Uploaded "${decodeUploadName(file.originalname)}"` : `Saved processed audio "${song.title}"`);

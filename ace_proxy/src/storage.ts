@@ -7,7 +7,7 @@
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
-import { DEFAULT_SETTINGS, GenerationTask, JunoSettings, MidiRecord, Song, StudioProject } from "./types";
+import { DEFAULT_SETTINGS, GenerationTask, JunoSettings, MidiRecord, Song, SongOperation, StudioProject } from "./types";
 
 export interface JunoDb {
   songs: Song[];
@@ -54,11 +54,13 @@ export function loadDb(): JunoDb {
   try {
     const raw = fs.readFileSync(dbPath(), "utf8");
     const parsed = JSON.parse(raw);
-    return {
+    const db = {
       ...structuredClone(EMPTY),
       ...parsed,
       settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
     };
+    backfillLineage(db);
+    return db;
   } catch (e: any) {
     if (e?.code !== "ENOENT") {
       console.error("[juno-proxy] could not read library DB:", e?.message || e);
@@ -73,6 +75,70 @@ export function loadDb(): JunoDb {
     }
     return structuredClone(EMPTY);
   }
+}
+
+
+/** Map a legacy `type` onto a lineage operation, for songs created before the
+ *  lineage fields existed. */
+const TYPE_TO_OPERATION: Record<string, SongOperation> = {
+  cover: "cover",
+  extended: "extend",
+  mashup: "mashup",
+  sample: "sample",
+  reversed: "reverse",
+  remix: "speed",
+  cropped: "crop",
+  replacement: "replace-section",
+  upload: "upload",
+  song: "generate",
+};
+
+/** Populate parentId / rootId / sourceIds / operation for any song that
+ *  predates them.
+ *
+ *  Idempotent and non-destructive: it only ever fills in fields that are
+ *  missing, so re-running it (every load) is a no-op once converged, and a
+ *  song whose lineage was set explicitly at creation is never overwritten.
+ *  Runs in memory on load — nothing is written until the next mutateDb, so a
+ *  read-only process never rewrites the user's DB.
+ */
+export function backfillLineage(db: JunoDb): void {
+  const byId = new Map(db.songs.map((s) => [s.id, s]));
+
+  for (const song of db.songs) {
+    if (!song.parentId && song.sourceSongId && byId.has(song.sourceSongId)) {
+      song.parentId = song.sourceSongId;
+    }
+    if (!song.sourceIds || song.sourceIds.length === 0) {
+      song.sourceIds = song.parentId ? [song.parentId] : [];
+    }
+    if (!song.operation) {
+      song.operation = TYPE_TO_OPERATION[song.type] || (song.parentId ? "cover" : "generate");
+    }
+  }
+
+  // rootId needs a walk, so resolve it after every parentId is known.
+  for (const song of db.songs) {
+    if (song.rootId && byId.has(song.rootId)) continue;
+    song.rootId = resolveRoot(song, byId);
+  }
+}
+
+/** Walk to the ultimate ancestor. Depth-capped and cycle-guarded: a corrupt or
+ *  hand-edited DB must not hang the proxy on load. */
+function resolveRoot(song: Song, byId: Map<string, Song>): string {
+  const seen = new Set<string>([song.id]);
+  let current = song;
+  for (let depth = 0; depth < 64; depth++) {
+    const parentId = current.parentId;
+    if (!parentId) return current.id;
+    const parent = byId.get(parentId);
+    // A parent that was deleted ends the chain here rather than dangling.
+    if (!parent || seen.has(parent.id)) return current.id;
+    seen.add(parent.id);
+    current = parent;
+  }
+  return current.id;
 }
 
 export function saveDb(db: JunoDb): void {

@@ -31,6 +31,7 @@ import {
   loadBuffer,
   mixBuffers,
   removeSection,
+  changeSpeedKeepPitch,
   previewSpeed,
   reverseBuffer,
 } from "../lib/dsp";
@@ -79,6 +80,8 @@ export function SongOverflowMenu({ song }: { song: Song }) {
   const [extendBy, setExtendBy] = useState(30);
   const [speed, setSpeed] = useState(100);
   const [previewing, setPreviewing] = useState(false);
+  /** true = time-stretch (pitch preserved); false = resample (turntable). */
+  const [keepPitch, setKeepPitch] = useState(false);
   const stopPreviewRef = useRef<(() => void) | null>(null);
   const [secondSourceId, setSecondSourceId] = useState("");
   const [blend, setBlend] = useState(50);
@@ -127,7 +130,7 @@ export function SongOverflowMenu({ song }: { song: Song }) {
       // Preview owns the transport: the bottom player and MIDI tab stop.
       claimTransport("editor", stopPreview);
       setPreviewing(true);
-      stopPreviewRef.current = await previewSpeed(song.audioUrl, speed / 100, () => {
+      stopPreviewRef.current = await previewSpeed(song.audioUrl, speed / 100, keepPitch, () => {
         stopPreviewRef.current = null;
         setPreviewing(false);
         releaseTransport("editor");
@@ -630,7 +633,17 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         footer={
           <>
             <Button variant="ghost" onClick={close}>Cancel</Button>
-            <Button variant="primary" loading={busy} onClick={() => renderLocal(`${(speed / 100).toFixed(2)}x`, "remix", (b) => changeSpeed(b, speed / 100))}>
+            <Button
+              variant="primary"
+              loading={busy}
+              onClick={() =>
+                renderLocal(
+                  `${(speed / 100).toFixed(2)}x${keepPitch ? " keyed" : ""}`,
+                  "remix",
+                  (b) => (keepPitch ? changeSpeedKeepPitch(b, speed / 100) : changeSpeed(b, speed / 100))
+                )
+              }
+            >
               Create version
             </Button>
           </>
@@ -659,23 +672,34 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         <div className="slider-row" style={{ gridTemplateColumns: "110px 1fr", alignItems: "center", marginTop: 12 }}>
           <span className="field-label" style={{ marginBottom: 0 }}>Pitch</span>
           <div className="segmented" role="radiogroup" aria-label="Pitch behaviour">
-            <button role="radio" aria-checked className="active">
+            <button
+              role="radio"
+              aria-checked={!keepPitch}
+              className={!keepPitch ? "active" : ""}
+              onClick={() => {
+                if (previewing) stopPreview();
+                setKeepPitch(false);
+              }}
+            >
               Follows speed
             </button>
             <button
               role="radio"
-              aria-checked={false}
-              disabled
-              title="Not implemented: preserving pitch needs time-stretching (a phase vocoder), not a resample."
+              aria-checked={keepPitch}
+              className={keepPitch ? "active" : ""}
+              onClick={() => {
+                if (previewing) stopPreview();
+                setKeepPitch(true);
+              }}
             >
               Keep pitch
             </button>
           </div>
         </div>
         <p className="inline-hint">
-          Speed is a resample, so pitch moves with it like a turntable. Keeping the original pitch means real
-          time-stretching (a phase vocoder) — that is a separate piece of DSP work, so the option is shown disabled
-          rather than faked.
+          {keepPitch
+            ? "Time-stretches the audio (WSOLA) so the key stays put — the track gets longer or shorter without going chipmunk. Rendering takes a few seconds longer, and sustained pure tones can warble slightly."
+            : "Resamples like a turntable: slowing down also drops the pitch. Instant, and usually the right choice for a vibe edit."}
         </p>
         {err && <p className="inline-error">{err}</p>}
       </Modal>

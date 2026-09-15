@@ -84,6 +84,144 @@ export async function changeSpeed(buf: AudioBuffer, rate: number): Promise<Audio
   return await off.startRendering();
 }
 
+/* ------------------------------------------------------------------ */
+/* Time-stretching (keep-pitch speed changes)                          */
+/* ------------------------------------------------------------------ */
+
+/** WSOLA — Waveform Similarity Overlap-Add.
+ *
+ *  Changes duration WITHOUT changing pitch, which is what "keep pitch" means:
+ *  a resample moves both together like a turntable, while this resequences
+ *  overlapping grains of the original waveform so every sample keeps its
+ *  original frequency content.
+ *
+ *  Why WSOLA rather than a phase vocoder: a phase vocoder needs an FFT per
+ *  frame plus phase-gradient integration, and its characteristic failure on
+ *  music is a smeared, "phasey" transient — exactly wrong for the percussive
+ *  material Juno generates. WSOLA works in the time domain, keeps transients
+ *  intact, and is a few hundred lines lighter. Its own failure mode is a slight
+ *  warble on sustained pure tones, which is the better trade here.
+ *
+ *  The similarity search is the "WS" part: for each output grain we look within
+ *  ±`seek` samples of the ideal input position for the offset whose waveform
+ *  best matches the tail of what we already wrote, then cross-fade. Without the
+ *  search this degrades to plain OLA, which clicks audibly at every grain.
+ *
+ *  `stretch` is the OUTPUT/INPUT duration ratio: 2.0 = twice as long (half
+ *  speed), 0.5 = half as long (double speed).
+ */
+export function timeStretch(buf: AudioBuffer, stretch: number): AudioBuffer {
+  const ratio = Math.min(4, Math.max(0.25, stretch));
+  if (Math.abs(ratio - 1) < 0.001) return buf;
+
+  const sr = buf.sampleRate;
+  const channels = buf.numberOfChannels;
+  // ~60 ms grains: long enough to hold a low-frequency period, short enough
+  // that the similarity search stays cheap and transients are not duplicated.
+  const grain = Math.round(sr * 0.06);
+  const overlap = Math.round(grain / 2);
+  const hopOut = grain - overlap;
+  const hopIn = Math.max(1, Math.round(hopOut / ratio));
+  const seek = Math.round(sr * 0.015); // ±15 ms similarity search window
+
+  const outLength = Math.max(1, Math.ceil(buf.length * ratio) + grain);
+  const out = blank(channels, outLength, sr);
+
+  // Hann cross-fade ramps, precomputed once.
+  const fadeIn = new Float32Array(overlap);
+  const fadeOut = new Float32Array(overlap);
+  for (let i = 0; i < overlap; i++) {
+    const w = 0.5 - 0.5 * Math.cos((Math.PI * i) / (overlap - 1 || 1));
+    fadeIn[i] = w;
+    fadeOut[i] = 1 - w;
+  }
+
+  // The similarity search runs ONCE on a mono mixdown and the winning offset is
+  // applied to every channel. Searching per channel would let left and right
+  // drift apart and collapse the stereo image.
+  const mono = new Float32Array(buf.length);
+  for (let c = 0; c < channels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < buf.length; i++) mono[i] += d[i] / channels;
+  }
+
+  const src: Float32Array[] = [];
+  const dst: Float32Array[] = [];
+  for (let c = 0; c < channels; c++) {
+    src.push(buf.getChannelData(c));
+    dst.push(out.getChannelData(c));
+  }
+
+  let inPos = 0;
+  let outPos = 0;
+  // The tail we want the next grain to continue from.
+  let template: Float32Array | null = null;
+
+  while (inPos + grain < buf.length && outPos + grain < outLength) {
+    let best = inPos;
+
+    if (template) {
+      let bestScore = -Infinity;
+      const lo = Math.max(0, inPos - seek);
+      const hi = Math.min(buf.length - grain - 1, inPos + seek);
+      // Cross-correlation, subsampled by 4: at 48 kHz that is still ~180
+      // comparison points per candidate, and it makes the search ~4x cheaper
+      // with no audible difference.
+      for (let cand = lo; cand <= hi; cand += 2) {
+        let score = 0;
+        for (let i = 0; i < overlap; i += 4) score += mono[cand + i] * template[i];
+        if (score > bestScore) {
+          bestScore = score;
+          best = cand;
+        }
+      }
+    }
+
+    for (let c = 0; c < channels; c++) {
+      const s = src[c];
+      const d = dst[c];
+      // Cross-fade the overlap region with whatever is already written.
+      for (let i = 0; i < overlap; i++) {
+        d[outPos + i] = d[outPos + i] * fadeOut[i] + s[best + i] * fadeIn[i];
+      }
+      // Copy the rest of the grain straight through.
+      for (let i = overlap; i < grain; i++) {
+        d[outPos + i] = s[best + i];
+      }
+    }
+
+    template = mono.slice(best + hopOut, best + hopOut + overlap);
+    inPos = best + hopIn;
+    outPos += hopOut;
+  }
+
+  // Trim the trailing silence the +grain margin left behind.
+  const used = Math.min(outLength, outPos + grain);
+  if (used >= outLength) return out;
+  const trimmed = blank(channels, used, sr);
+  for (let c = 0; c < channels; c++) {
+    trimmed.getChannelData(c).set(out.getChannelData(c).subarray(0, used));
+  }
+  return trimmed;
+}
+
+/** Speed change that preserves pitch. `rate` matches `changeSpeed`:
+ *  1.5 = 1.5x faster, 0.8 = slower. */
+export function changeSpeedKeepPitch(buf: AudioBuffer, rate: number): AudioBuffer {
+  const r = Math.min(4, Math.max(0.25, rate));
+  const stretched = timeStretch(buf, 1 / r);
+  // The similarity search drifts by a fraction of a grain per hop, so the raw
+  // result lands ~1-3% long. Trim to the exact target so "0.8x" really is
+  // 1/0.8 of the original and stays in sync with anything cut against it.
+  const target = Math.max(1, Math.round(buf.length / r));
+  if (stretched.length <= target) return stretched;
+  const out = blank(stretched.numberOfChannels, target, stretched.sampleRate);
+  for (let c = 0; c < stretched.numberOfChannels; c++) {
+    out.getChannelData(c).set(stretched.getChannelData(c).subarray(0, target));
+  }
+  return out;
+}
+
 /** Blend two buffers: 0 = all A, 100 = all B. Output length = the longer. */
 export function mixBuffers(a: AudioBuffer, b: AudioBuffer, blendPct: number): AudioBuffer {
   const blend = Math.min(100, Math.max(0, blendPct)) / 100;
@@ -224,20 +362,36 @@ export function downloadUrl(url: string, filename: string): void {
 export async function previewSpeed(
   url: string,
   rate: number,
+  keepPitch: boolean,
   onEnd?: () => void
 ): Promise<() => void> {
   const buf = await loadBuffer(url);
   const c = ctx();
   if (c.state === "suspended") await c.resume();
-  const src = c.createBufferSource();
-  src.buffer = buf;
-  src.playbackRate.value = Math.min(4, Math.max(0.25, rate));
-  src.connect(c.destination);
-  src.onended = () => onEnd?.();
+  const r = Math.min(4, Math.max(0.25, rate));
+
   // Preview from ~20% in: intros are often sparse and a speed change is much
   // easier to judge over the body of the track.
   const start = Math.min(buf.duration * 0.2, Math.max(0, buf.duration - 12));
-  src.start(0, start, Math.min(12 * src.playbackRate.value, buf.duration - start));
+  const src = c.createBufferSource();
+
+  if (keepPitch) {
+    // Time-stretching is O(n) over the whole buffer, so stretch only the slice
+    // we are about to play — a 12 s excerpt instead of a 4-minute song.
+    const excerpt = cropBuffer(buf, start, Math.min(start + 12, buf.duration));
+    src.buffer = changeSpeedKeepPitch(excerpt, r);
+    src.playbackRate.value = 1;
+    src.connect(c.destination);
+    src.onended = () => onEnd?.();
+    src.start(0);
+  } else {
+    src.buffer = buf;
+    src.playbackRate.value = r;
+    src.connect(c.destination);
+    src.onended = () => onEnd?.();
+    src.start(0, start, Math.min(12 * r, buf.duration - start));
+  }
+
   return () => {
     src.onended = null;
     try {

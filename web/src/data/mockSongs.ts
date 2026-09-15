@@ -31,6 +31,11 @@ export interface SongComment {
   text: string;
 }
 
+export type SongOperation =
+  | "cover" | "extend" | "mashup" | "sample" | "inspiration" | "reverse"
+  | "speed" | "reuse-prompt" | "crop" | "remove-section" | "replace-section"
+  | "stems" | "stem" | "midi-render" | "upload" | "generate";
+
 export interface Song {
   id: string;
   title: string;
@@ -55,6 +60,12 @@ export interface Song {
   createdAt: string;
   updatedAt: string;
   sourceSongId?: string;
+  /* Lineage — see ace_proxy/src/types.ts. Backfilled by the proxy on load, so
+     every song has these by the time the client sees it. */
+  parentId?: string;
+  rootId?: string;
+  sourceIds?: string[];
+  operation?: SongOperation;
   aceTaskId?: string;
   generationStatus?: GenerationStatus;
   generationError?: string;

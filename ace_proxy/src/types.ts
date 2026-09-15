@@ -23,6 +23,25 @@ export interface SongComment {
   text: string;
 }
 
+/** What produced a derived song. Mirrors the ⋯ menu plus stem separation. */
+export type SongOperation =
+  | "cover"
+  | "extend"
+  | "mashup"
+  | "sample"
+  | "inspiration"
+  | "reverse"
+  | "speed"
+  | "reuse-prompt"
+  | "crop"
+  | "remove-section"
+  | "replace-section"
+  | "stems"
+  | "stem"
+  | "midi-render"
+  | "upload"
+  | "generate";
+
 export interface Song {
   id: string;
   title: string;
@@ -57,6 +76,21 @@ export interface Song {
   createdAt: string;
   updatedAt: string;
   sourceSongId?: string;
+
+  /* ---- Lineage (Library tree) -------------------------------------
+   * Stored explicitly rather than inferred from titles or filenames, so a
+   * renamed song never loses its history.
+   *   parentId  - immediate source. Undefined for a root.
+   *   rootId    - ultimate ancestor. Equals the song's own id for a root, so
+   *               grouping is one pass with no tree walk per row.
+   *   sourceIds - every input. Mashups have two; most operations have one.
+   *               parentId is sourceIds[0] by convention.
+   *   operation - what produced this song from its sources.
+   * Backfilled from sourceSongId on first load (see storage.ts). */
+  parentId?: string;
+  rootId?: string;
+  sourceIds?: string[];
+  operation?: SongOperation;
   aceTaskId?: string;
   generationStatus?: "idle" | GenerationStatus;
   generationError?: string;

@@ -8,6 +8,7 @@ import { useJuno } from "../App";
 import { LibraryTabs, LibraryTab } from "../components/LibraryTabs";
 import { Toolbar } from "../components/Toolbar";
 import { SongRow } from "../components/SongRow";
+import { buildLineageTree, flattenTree } from "../lib/lineage";
 import { UploadModal } from "../components/UploadModal";
 import { PlaylistsPanel } from "../components/PlaylistsPanel";
 import { Button } from "../components/Button";
@@ -64,7 +65,9 @@ export function LibraryPage() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<string[]>([]);
   const [sort, setSort] = useState(SONG_SORTS[0]);
-  const [view, setView] = useState("List");
+  const [view, setView] = useState("Tree");
+  /** Collapsed branch ids. UI-only — deliberately not persisted to the DB. */
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
   const likedHooks: Record<string, boolean> = Object.fromEntries(hooks.map((h) => [h.id, h.liked]));
@@ -102,6 +105,13 @@ export function LibraryPage() {
     });
   }, [songs, q, filters, sort]);
 
+  /** Roots of the lineage forest, built from the SAME filtered list, so a
+   *  search or filter narrows the tree instead of showing hidden ancestors.
+   *  Songs whose parent was filtered out are promoted to roots by
+   *  buildLineageTree rather than disappearing. */
+  const treeRoots = useMemo(() => buildLineageTree(songRows), [songRows]);
+
+
   const commonToolbar = (
     filterOptions: { id: string; label: string }[],
     sortOptions: string[],
@@ -119,7 +129,7 @@ export function LibraryPage() {
       sortOptions={sortOptions}
       sort={sortOptions.includes(sort) ? sort : sortOptions[0]}
       onSort={setSort}
-      viewOptions={tab === "Songs" ? ["List", "Compact"] : undefined}
+      viewOptions={tab === "Songs" ? ["Tree", "List", "Compact"] : undefined}
       view={tab === "Songs" ? view : undefined}
       onView={tab === "Songs" ? setView : undefined}
       quickPills={
@@ -182,14 +192,37 @@ export function LibraryPage() {
                 }
               />
             )}
-            {songRows.slice((page - 1) * 25, page * 25).map((s) => (
-              <SongRow
-                key={s.id}
-                song={s}
-                queueIds={songRows.map((x) => x.id)}
-                showPlayCount
-              />
-            ))}
+            {view === "Tree"
+              ? /* Tree view pages over ROOTS, not rows: paginating mid-branch
+                   would orphan children from their parent across a page break. */
+                flattenTree(treeRoots.slice((page - 1) * 25, page * 25), collapsed).map((n) => (
+                  <SongRow
+                    key={n.song.id}
+                    song={n.song}
+                    queueIds={songRows.map((x) => x.id)}
+                    showPlayCount
+                    depth={n.depth}
+                    childCount={n.children.length}
+                    descendantCount={n.descendantCount}
+                    collapsed={collapsed.has(n.song.id)}
+                    onToggleCollapse={() =>
+                      setCollapsed((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(n.song.id)) next.delete(n.song.id);
+                        else next.add(n.song.id);
+                        return next;
+                      })
+                    }
+                  />
+                ))
+              : songRows.slice((page - 1) * 25, page * 25).map((s) => (
+                  <SongRow
+                    key={s.id}
+                    song={s}
+                    queueIds={songRows.map((x) => x.id)}
+                    showPlayCount
+                  />
+                ))}
           </div>
         </>
       )}
