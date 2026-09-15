@@ -8,7 +8,9 @@ import { useJuno } from "../App";
 import { LibraryTabs, LibraryTab } from "../components/LibraryTabs";
 import { Toolbar } from "../components/Toolbar";
 import { SongRow } from "../components/SongRow";
-import { buildLineageTree, flattenTree } from "../lib/lineage";
+import { SongTree, countRoots } from "../components/SongTree";
+import { WorkspaceDeleteModal } from "../components/WorkspaceDeleteModal";
+import { Song } from "../data/mockSongs";
 import { UploadModal } from "../components/UploadModal";
 import { PlaylistsPanel } from "../components/PlaylistsPanel";
 import { Button } from "../components/Button";
@@ -16,7 +18,24 @@ import { Badge } from "../components/Badge";
 import { coverGradient } from "../lib/audio";
 import { fmtDuration, fmtRelative } from "../lib/format";
 
-const SONG_SORTS = ["Newest First", "Oldest First", "Title A–Z", "Most Played"];
+const SONG_SORTS = ["Newest First", "Oldest First", "Title A–Z", "Title Z–A", "Most Played"];
+
+/** One comparator, shared by the flat list and the lineage tree's roots, so a
+ *  sort selection means the same thing in both views. */
+function songComparator(sort: string): (a: Song, b: Song) => number {
+  switch (sort) {
+    case "Oldest First":
+      return (a, b) => a.createdAt.localeCompare(b.createdAt);
+    case "Title A–Z":
+      return (a, b) => a.title.localeCompare(b.title);
+    case "Title Z–A":
+      return (a, b) => b.title.localeCompare(a.title);
+    case "Most Played":
+      return (a, b) => b.playCount - a.playCount;
+    default:
+      return (a, b) => b.createdAt.localeCompare(a.createdAt);
+  }
+}
 const NAME_SORTS = ["Newest First", "Oldest First", "Name A–Z"];
 
 function EmptyTab({ title, hint }: { title: string; hint: string }) {
@@ -47,7 +66,9 @@ export function LibraryPage() {
     patchSong,
     playSong,
   } = useJuno();
-  // Hooks are the short clips made with "Sample this song"; liking a hook
+  // "Samples" are the clips made with "Sample this song". This was called
+  // "Hooks", which promised hook detection that does not exist — it only ever
+  // listed sample output, so the tab is named for what it actually holds.
   // likes that clip. Cover art is the generated artwork of each song.
   const hooks = useMemo(
     () =>
@@ -67,7 +88,7 @@ export function LibraryPage() {
   const [sort, setSort] = useState(SONG_SORTS[0]);
   const [view, setView] = useState("Tree");
   /** Collapsed branch ids. UI-only — deliberately not persisted to the DB. */
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [deleteWorkspace, setDeleteWorkspace] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [uploadOpen, setUploadOpen] = useState(false);
   const likedHooks: Record<string, boolean> = Object.fromEntries(hooks.map((h) => [h.id, h.liked]));
@@ -91,25 +112,12 @@ export function LibraryPage() {
     if (filters.includes("instrumental"))
       list = list.filter((s) => s.metadata.instrumental);
     if (filters.includes("covers")) list = list.filter((s) => s.type === "cover");
-    return [...list].sort((a, b) => {
-      switch (sort) {
-        case "Oldest First":
-          return a.createdAt.localeCompare(b.createdAt);
-        case "Title A–Z":
-          return a.title.localeCompare(b.title);
-        case "Most Played":
-          return b.playCount - a.playCount;
-        default:
-          return b.createdAt.localeCompare(a.createdAt);
-      }
-    });
+    return [...list].sort(songComparator(sort));
   }, [songs, q, filters, sort]);
 
-  /** Roots of the lineage forest, built from the SAME filtered list, so a
-   *  search or filter narrows the tree instead of showing hidden ancestors.
-   *  Songs whose parent was filtered out are promoted to roots by
-   *  buildLineageTree rather than disappearing. */
-  const treeRoots = useMemo(() => buildLineageTree(songRows), [songRows]);
+  /** Root count only — SongTree builds the forest itself. Pagination pages over
+   *  ROOTS so a branch is never split across pages. */
+  const rootCount = useMemo(() => countRoots(songRows), [songRows]);
 
 
   const commonToolbar = (
@@ -179,7 +187,7 @@ export function LibraryPage() {
               { id: "covers", label: "Covers" },
             ],
             SONG_SORTS,
-            songRows.length
+            view === "Tree" ? rootCount : songRows.length
           )}
           <div className={view === "Compact" ? "song-list compact" : "song-list"}>
             {songRows.length === 0 && (
@@ -192,37 +200,19 @@ export function LibraryPage() {
                 }
               />
             )}
-            {view === "Tree"
-              ? /* Tree view pages over ROOTS, not rows: paginating mid-branch
-                   would orphan children from their parent across a page break. */
-                flattenTree(treeRoots.slice((page - 1) * 25, page * 25), collapsed).map((n) => (
-                  <SongRow
-                    key={n.song.id}
-                    song={n.song}
-                    queueIds={songRows.map((x) => x.id)}
-                    showPlayCount
-                    depth={n.depth}
-                    childCount={n.children.length}
-                    descendantCount={n.descendantCount}
-                    collapsed={collapsed.has(n.song.id)}
-                    onToggleCollapse={() =>
-                      setCollapsed((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(n.song.id)) next.delete(n.song.id);
-                        else next.add(n.song.id);
-                        return next;
-                      })
-                    }
-                  />
-                ))
-              : songRows.slice((page - 1) * 25, page * 25).map((s) => (
-                  <SongRow
-                    key={s.id}
-                    song={s}
-                    queueIds={songRows.map((x) => x.id)}
-                    showPlayCount
-                  />
-                ))}
+            {view === "Tree" ? (
+              <SongTree
+                songs={songRows}
+                queueIds={songRows.map((x) => x.id)}
+                showPlayCount
+                compare={songComparator(sort)}
+                pageSlice={[(page - 1) * 25, page * 25]}
+              />
+            ) : (
+              songRows.slice((page - 1) * 25, page * 25).map((s) => (
+                <SongRow key={s.id} song={s} queueIds={songRows.map((x) => x.id)} showPlayCount />
+              ))
+            )}
           </div>
         </>
       )}
@@ -258,18 +248,39 @@ export function LibraryPage() {
                     {songs.filter((s) => (s.workspaceId ?? defaultWorkspaceId) === w.id && !s.trashed).length}{" "}
                     songs · updated {fmtRelative(w.updatedAt)}
                   </span>
-                  <Button
-                    onClick={() => {
-                      setActiveWorkspaceId(w.id);
-                      navigate("/create");
-                    }}
-                  >
-                    Open workspace
-                  </Button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Button
+                      onClick={() => {
+                        setActiveWorkspaceId(w.id);
+                        navigate("/create");
+                      }}
+                    >
+                      Open workspace
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={workspaces.length < 2}
+                      title={
+                        workspaces.length < 2
+                          ? "Can't delete your only workspace"
+                          : "Delete this workspace and move its songs to Trash"
+                      }
+                      onClick={() => setDeleteWorkspace(w.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </div>
               ))}
           </div>
         </>
+      )}
+
+      {deleteWorkspace && (
+        <WorkspaceDeleteModal
+          workspaceId={deleteWorkspace}
+          onClose={() => setDeleteWorkspace(null)}
+        />
       )}
 
       {tab === "Studio Projects" && (
@@ -446,16 +457,16 @@ export function LibraryPage() {
         </>
       )}
 
-      {(tab === "Hooks" || tab === "Liked Hooks") && (
+      {(tab === "Samples" || tab === "Liked Samples") && (
         <>
           {commonToolbar([], NAME_SORTS, hooks.length)}
           <div className="card-grid">
-            {hooks.length === 0 && tab === "Hooks" && (
+            {hooks.length === 0 && tab === "Samples" && (
               <EmptyTab title="No hooks yet" hint="Use ⋯ → Sample this song to cut a 10-second hook from any track." />
             )}
             {hooks
               .filter((h) => matches(h.title))
-              .filter((h) => (tab === "Liked Hooks" ? likedHooks[h.id] : true))
+              .filter((h) => (tab === "Liked Samples" ? likedHooks[h.id] : true))
               .map((h) => (
                 <div key={h.id} className="asset-card">
                   <div
@@ -471,7 +482,7 @@ export function LibraryPage() {
                     <Button onClick={() => playSong(h.id, hooks.map((x) => x.id))}>▶ Play</Button>
                     <Button
                       variant="icon"
-                      label={likedHooks[h.id] ? "Unlike hook" : "Like hook"}
+                      label={likedHooks[h.id] ? "Unlike sample" : "Like sample"}
                       active={!!likedHooks[h.id]}
                       onClick={() => patchSong(h.id, { liked: !likedHooks[h.id] })}
                     >
@@ -480,7 +491,7 @@ export function LibraryPage() {
                   </div>
                 </div>
               ))}
-            {tab === "Liked Hooks" &&
+            {tab === "Liked Samples" &&
               hooks.filter((h) => likedHooks[h.id]).length === 0 && (
                 <EmptyTab
                   title="No liked hooks yet"

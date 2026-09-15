@@ -297,6 +297,15 @@ export const midiManager = {
     void work();
   },
 
+  /** Start MuScriptor on demand, independently of any transcription job.
+   *  Previously the only way to get it into VRAM was to run a transcription,
+   *  which made "re-transcribe" fail confusingly when nothing was loaded. */
+  async startServer(size?: string) {
+    const { settings } = loadDb();
+    const want = size || settings.midiModelSize;
+    await ensureServer(want, (stage) => console.log(`[juno-proxy] muscriptor: ${stage}`));
+  },
+
   async stopServer(reason: string) {
     if (working) throw new Error("A transcription is running.");
     busy = { kind: "stopping", since: now() };

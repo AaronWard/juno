@@ -437,7 +437,8 @@ export async function renderOffline(
   notes: MNote[],
   tracks: MTrack[],
   duration: number,
-  mute: (track: number) => boolean = () => false
+  mute: (track: number) => boolean = () => false,
+  onProgress?: (stage: string) => void
 ): Promise<AudioBuffer> {
   const sr = 44100;
   const len = Math.ceil((duration + 2) * sr);
@@ -446,10 +447,48 @@ export async function renderOffline(
   comp.threshold.value = -14;
   comp.ratio.value = 4;
   comp.connect(ctx.destination);
-  for (const n of notes) {
-    if (mute(n.track)) continue;
+
+  const audible = notes.filter((n) => !mute(n.track));
+  onProgress?.(`Scheduling ${audible.length} notes…`);
+  for (const n of audible) {
     const tr = tracks.find((t) => t.index === n.track);
     playNote(ctx, comp, n, tr, n.start, n.dur);
   }
-  return await ctx.startRendering();
+
+  onProgress?.("Rendering audio…");
+  const out = await ctx.startRendering();
+
+  // Normalise.
+  //
+  // A full-song transcription is far denser than anything the live player deals
+  // with — thousands of notes, dozens sounding at once, and sustain patches that
+  // ring for seconds. Those voices sum well past ±1.0. Web Audio keeps the
+  // rendered buffer in float and does NOT clamp, so the overshoot survived all
+  // the way to the WAV encoder, which clamped every sample to ±1. The result was
+  // a hard-clipped square wave for minutes on end: "literally just static".
+  //
+  // Scaling the finished buffer is both the correct fix and a cheap one — the
+  // waveform shape is intact in the float buffer, it is only the conversion that
+  // destroyed it.
+  onProgress?.("Normalising…");
+  let peak = 0;
+  for (let c = 0; c < out.numberOfChannels; c++) {
+    const d = out.getChannelData(c);
+    for (let i = 0; i < d.length; i++) {
+      const v = Math.abs(d[i]);
+      if (v > peak) peak = v;
+    }
+  }
+  const TARGET = 0.89; // ~-1 dBFS, leaves headroom for downstream encoders
+  if (peak > 0.0001 && Math.abs(peak - TARGET) > 0.01) {
+    const gain = TARGET / peak;
+    for (let c = 0; c < out.numberOfChannels; c++) {
+      const d = out.getChannelData(c);
+      for (let i = 0; i < d.length; i++) d[i] *= gain;
+    }
+    if (peak > 1) {
+      console.log(`[juno] MIDI render peaked at ${peak.toFixed(2)} (would have clipped); scaled by ${gain.toFixed(3)}`);
+    }
+  }
+  return out;
 }

@@ -1941,37 +1941,79 @@ button.chip {
 /* ------------------------------------------------------------------ */
 
 /* Derived rows are indented siblings, not nested containers, so the tree and
-   flat views share one layout. */
+   flat views share one layout. First version used 22px steps with an 18px
+   toggle, which was invisible against a ~64px row — nesting has to be readable
+   at a glance, so: wider steps, a real elbow connector, a bigger toggle, and
+   cover art that shrinks with depth so hierarchy is carried by more than
+   whitespace. */
 .song-row.derived {
   position: relative;
 }
-.song-row.derived .lineage-spine {
+.song-row.derived .lineage-branch {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
+  width: 18px;
+  margin-left: -26px;
+  pointer-events: none;
+}
+/* vertical run of the elbow */
+.song-row.derived .lineage-branch::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 50%;
   width: 2px;
-  margin-left: -10px;
-  background: var(--color-border-subtle);
+  background: var(--color-border);
   border-radius: 2px;
+}
+/* horizontal arm into the row */
+.song-row.derived .lineage-branch::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  background: var(--color-border);
+  border-bottom-left-radius: 4px;
+}
+/* Derived rows get progressively smaller artwork. */
+.song-row.derived .song-art,
+.song-row.derived .song-thumb,
+.song-row.derived img {
+  width: 44px;
+  height: 44px;
+}
+.song-row.derived .badge {
+  opacity: 1;
 }
 .lineage-toggle {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 2px;
+  margin-right: 4px;
   padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-bg-pill);
   color: var(--color-text-secondary);
-  font-size: 10px;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .lineage-toggle:hover {
-  background: var(--color-bg-pill);
+  background: var(--color-bg-elevated, var(--color-bg-sidebar));
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+.lineage-toggle.collapsed {
+  border-color: var(--color-accent);
   color: var(--color-text-primary);
 }

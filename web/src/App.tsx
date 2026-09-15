@@ -96,6 +96,8 @@ interface JunoStore {
   patchSong: (id: string, patch: Partial<Song>) => void;
   addSong: (song: Song) => void;
   trashSong: (id: string) => void;
+  /** Drop a workspace from local state after the server deleted it. */
+  removeWorkspace: (id: string) => void;
   restoreSong: (id: string) => void;
   deleteForever: (id: string) => void;
   emptyTrash: () => void;
@@ -408,6 +410,11 @@ export default function App() {
       ...prev,
     ]);
   }, []);
+
+  const removeWorkspace = useCallback(
+    (id: string) => setWorkspaces((ws) => ws.filter((w) => w.id !== id)),
+    []
+  );
 
   const trashSong = useCallback(
     (id: string) => {
@@ -799,6 +806,7 @@ export default function App() {
     patchSong,
     addSong,
     trashSong,
+    removeWorkspace,
     restoreSong,
     deleteForever,
     emptyTrash,

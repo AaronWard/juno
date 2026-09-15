@@ -49,12 +49,18 @@ export function ModelStatus({ compact = false }: { compact?: boolean }) {
           ? "idle"
           : "warn";
   const selectedLabel = presetLabel(selectedPreset);
+  // Every model currently holding VRAM, ACE-Step or not. "No model loaded" was
+  // being printed while MuScriptor sat in ~10 GB, which made the VRAM bar look
+  // broken when it was the only honest thing on screen.
+  const residents: { kind: string; label: string }[] = a.residents || [];
+  const residentText = residents.map((r) => r.label).join(" + ");
+
   const text: Record<string, string> = {
     offline: "ACE-Step is offline",
     starting: "Starting ACE-Step…",
-    idle: "No model loaded",
+    idle: residentText ? `${residentText} loaded` : "Nothing loaded",
     loading: `Loading ${a.busy?.label || "model"}… ${elapsed(a.busy?.since)}`,
-    ready: `${a.loadedLabel} ready`,
+    ready: residents.length > 1 ? `${residentText} ready` : `${a.loadedLabel} ready`,
     generating: `Generating with ${a.loadedLabel}${a.waitingTasks ? ` · ${a.waitingTasks} waiting` : ""}`,
     unloading: "Unloading models…",
   };
@@ -79,7 +85,11 @@ export function ModelStatus({ compact = false }: { compact?: boolean }) {
       <button className="engine-mini" onClick={() => navigate("/settings")} title="Engines — hover for details, click for Settings">
         <span className="engine-mini-row">
           <span className={`status-dot ${tone}`} aria-hidden="true" />
-          <span className="engine-mini-text">{a.activity === "ready" ? a.loadedLabel?.replace("Juno ", "") : text[a.activity]}</span>
+          <span className="engine-mini-text">
+          {a.activity === "ready" && residents.length <= 1
+            ? a.loadedLabel?.replace("Juno ", "")
+            : text[a.activity]}
+        </span>
         </span>
         {(m.activity === "transcribing" || m.activity === "starting") && (
           <span className="engine-mini-row">

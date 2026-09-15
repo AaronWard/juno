@@ -90,32 +90,53 @@ export function MidiPage({ selectedId }: { selectedId?: string }) {
 /* ------------------------------------------------------------------ */
 
 function MidiEngineLine() {
-  const { status, notify } = useJuno();
+  const { status, notify, refreshHealth } = useJuno();
+  const [busy, setBusy] = useState(false);
   const m = status?.midi;
-  if (!m) return <span className="inline-hint">Checking the transcription engine…</span>;
-  const text: Record<string, string> = {
-    stopped: "MuScriptor is stopped — it starts automatically when you transcribe.",
-    starting: `Starting MuScriptor (${m.wantedSize})… the first start downloads the model.`,
-    ready: `MuScriptor ready (${m.modelSize || m.wantedSize}).`,
-    transcribing: `Transcribing${m.queued ? ` · ${m.queued} waiting` : ""}…`,
-    stopping: "Stopping MuScriptor…",
-    error: "MuScriptor failed to start.",
+  if (!m) return null;
+
+  const label: Record<string, string> = {
+    stopped: "MuScriptor not loaded",
+    starting: `Loading MuScriptor${m.wantedSize ? ` (${m.wantedSize})` : ""}…`,
+    ready: `MuScriptor ready${m.modelSize ? ` (${m.modelSize})` : ""}`,
+    transcribing: "Transcribing…",
+    stopping: "Unloading MuScriptor…",
+    error: "MuScriptor failed to start",
   };
+  const tone = m.activity === "ready" ? "ok" : m.activity === "error" ? "warn" : m.activity === "stopped" ? "idle" : "busy";
+
+  // Loading used to be a side effect of starting a transcription, so the only
+  // way to get MuScriptor into VRAM was to extract a MIDI from some other song.
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      refreshHealth();
+    } catch (e: any) {
+      notify(e?.message || "MuScriptor request failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <span className="inline-hint engine-line">
-      <span className={`status-dot ${m.activity === "ready" || m.activity === "transcribing" ? "ok" : m.activity === "error" ? "bad" : m.activity === "stopped" ? "idle" : "warn"}`} />
-      {text[m.activity]}
-      {m.stopAt && m.activity === "ready" && ` Frees its VRAM at ${new Date(m.stopAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}
-      {m.activity === "ready" && (
-        <button
-          className="link-btn"
-          onClick={() => api.stopMidiServer().catch((e) => notify(e.message, "error"))}
-        >
-          Stop now
-        </button>
+    <div className="engine-line">
+      <span className={`dot ${tone}`} aria-hidden="true" />
+      <span>{label[m.activity] || m.activity}</span>
+      {m.stopAt && m.activity === "ready" && (
+        <span className="inline-hint">· frees its VRAM at {new Date(m.stopAt).toLocaleTimeString()}</span>
       )}
-      {m.lastError && m.activity !== "transcribing" && <span className="inline-error"> {m.lastError.message}</span>}
-    </span>
+      {(m.activity === "stopped" || m.activity === "error") && (
+        <Button variant="ghost" loading={busy} onClick={() => run(() => api.midiLoad())}>
+          Load MuScriptor
+        </Button>
+      )}
+      {m.activity === "ready" && (
+        <Button variant="ghost" loading={busy} onClick={() => run(() => api.midiUnload())}>
+          Unload (free VRAM)
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -132,16 +153,30 @@ function RetranscribeControls({
   label?: string;
   onDone?: () => void;
 }) {
-  const { upsertMidi, notify } = useJuno();
+  const { upsertMidi, notify, refreshMidi } = useJuno();
   const [size, setSize] = useState(item.modelSize || "medium");
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
     setBusy(true);
     try {
+      // Queue it, then make the queued state visible immediately — the first
+      // version flipped status to "queued" server-side and returned, so from
+      // the UI nothing appeared to happen at all.
       const r = await api.midiRetry(item.id, { modelSize: size });
       upsertMidi(r.item);
+      notify(`Re-transcribing "${item.title}" with the ${size} model…`, "info");
       onDone?.();
+      // Poll until it leaves the queue, so the row shows progress and the new
+      // result replaces the old one without a manual refresh.
+      await refreshMidi();
+      let tries = 0;
+      const poll = window.setInterval(async () => {
+        tries += 1;
+        await refreshMidi();
+        if (tries > 600) window.clearInterval(poll);
+      }, 1500);
+      window.setTimeout(() => window.clearInterval(poll), 15 * 60000);
     } catch (e: any) {
       notify(e?.message || "Could not start the transcription", "error");
     } finally {
@@ -382,7 +417,7 @@ const SHORTCUTS: [string, string][] = [
 ];
 
 function MidiWorkspace({ item }: { item: MidiItem }) {
-  const { upsertMidi, removeMidi, navigate, notify, addSong, songs, activeWorkspaceId } = useJuno();
+  const { upsertMidi, removeMidi, navigate, notify, addSong, songs, activeWorkspaceId, workspaces } = useJuno();
   const player = useMemo(() => new MidiPlayer(), []);
   useEffect(() => () => player.dispose(), [player]);
 
@@ -410,6 +445,9 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
   /** Milliseconds the recording is shifted against the MIDI, for A/B listening. */
   const [audioOffset, setAudioOffset] = useState(0);
   const [retranscribeOpen, setRetranscribeOpen] = useState(false);
+  const [renderOpen, setRenderOpen] = useState(false);
+  const [renderStage, setRenderStage] = useState<string | null>(null);
+  const [renderWorkspace, setRenderWorkspace] = useState<string>("");
   const [busy, setBusy] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -607,27 +645,36 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
-  const renderWav = async () => {
+  /** Render the transcription through the built-in synth and save it as a real
+   *  library track. Long-running and entirely synchronous inside the browser,
+   *  so it reports every stage — it used to run silently for a minute. */
+  const renderWav = async (workspaceId?: string) => {
     setBusy("render");
+    setRenderStage("Preparing…");
     try {
       const audible = (i: number) => (soloed.size ? soloed.has(i) : !muted.has(i));
-      const buf = await renderOffline(notes, tracks, contentEnd, (i) => !audible(i));
+      const buf = await renderOffline(notes, tracks, contentEnd, (i) => !audible(i), setRenderStage);
+      setRenderStage("Encoding WAV…");
       const t = `${item.title} (MIDI render)`;
       const src = songs.find((s) => s.id === item.sourceSongId);
+      setRenderStage("Saving to library…");
       const res = await api.upload(bufferToFile(buf, t), {
         title: t,
         type: "remix",
+        operation: "midi-render",
         description: `Synth render of the MIDI transcription of "${item.title}"`,
         sourceSongId: item.sourceSongId,
-        workspaceId: src?.workspaceId || activeWorkspaceId,
+        workspaceId: workspaceId ?? (src?.workspaceId || activeWorkspaceId),
         durationSeconds: Math.round(buf.duration),
       });
       addSong(res.asset);
-      notify(`Rendered "${t}" to your library.`, "success");
+      notify(`Rendered "${t}" — it's in your Library and Create list.`, "success");
     } catch (e: any) {
       notify(e?.message || "Render failed", "error");
     } finally {
       setBusy(null);
+      setRenderStage(null);
+      setRenderOpen(false);
     }
   };
 
@@ -673,6 +720,47 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
           </>
         )}
         <DeleteModal open={confirmDelete} title={item.title} onCancel={() => setConfirmDelete(false)} onConfirm={doDelete} />
+      <Modal
+        title="Render MIDI to audio"
+        open={renderOpen}
+        onClose={() => (busy === "render" ? undefined : setRenderOpen(false))}
+        footer={
+          <>
+            <Button variant="ghost" disabled={busy === "render"} onClick={() => setRenderOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={busy === "render"} onClick={() => renderWav(renderWorkspace || undefined)}>
+              Render {notes.length} notes
+            </Button>
+          </>
+        }
+      >
+        <p>
+          Plays the transcription through Juno's built-in synth and saves the result as a real audio track in your
+          Library and Create list. Muted and soloed tracks are respected.
+        </p>
+        <p className="inline-hint">
+          This is for checking and sharing a transcription, not for production — export the .mid to a DAW for that.
+        </p>
+        <label className="field">
+          <span className="field-label">Save to workspace</span>
+          <select className="text-input" value={renderWorkspace} onChange={(e) => setRenderWorkspace(e.target.value)}>
+            <option value="">Same as the source song</option>
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {busy === "render" && (
+          <p className="inline-hint" role="status" style={{ marginTop: 10 }}>
+            <span className="spinner" aria-hidden="true" /> {renderStage || "Working…"} — dense transcriptions can take
+            a minute.
+          </p>
+        )}
+      </Modal>
+
       <Modal
         title="Re-transcribe this audio"
         open={retranscribeOpen}
@@ -741,14 +829,18 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
               ...(item.quantizedMidiUrl
                 ? [{ id: "dlq", label: "⬇ Download quantized .mid (snapped to the beat — best for notation)", onSelect: () => download("quantized") }]
                 : []),
-              { id: "render", label: busy === "render" ? "Rendering…" : "♪ Render to WAV → Library", disabled: !!busy, onSelect: renderWav },
+              {
+                id: "render",
+                label: busy === "render" ? `Rendering… ${renderStage || ""}` : "♪ Render to WAV → Library",
+                disabled: !!busy,
+                onSelect: () => setRenderOpen(true),
+              },
               ...(item.edited || dirty ? [{ id: "revert", label: "↺ Revert to original transcription", onSelect: revert }] : []),
               {
                 id: "retranscribe",
                 label: "⟳ Re-transcribe (choose model size)",
                 onSelect: () => setRetranscribeOpen(true),
               },
-              { id: "src", label: "Open source song", disabled: !item.sourceSongId, onSelect: () => navigate(`/editor/${item.sourceSongId}`) },
               { id: "del", label: "🗑 Delete", onSelect: () => setConfirmDelete(true) },
             ]}
           />

@@ -91,9 +91,9 @@ export function SongRow({
       onClick={onSelect}
       // Indent rather than nesting <div>s: keeps every row a direct sibling so
       // the flat and tree views share one layout and one set of CSS rules.
-      style={depth > 0 ? { paddingLeft: 12 + depth * 22 } : undefined}
+      style={depth > 0 ? { paddingLeft: 12 + depth * 36 } : undefined}
     >
-      {depth > 0 && <span className="lineage-spine" aria-hidden="true" />}
+      {depth > 0 && <span className="lineage-branch" aria-hidden="true" />}
       {childCount > 0 && (
         <button
           className={`lineage-toggle${collapsed ? " collapsed" : ""}`}

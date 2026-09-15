@@ -11,6 +11,7 @@ import { useJuno } from "../App";
 import { CreatePanel } from "../components/CreatePanel";
 import { Toolbar } from "../components/Toolbar";
 import { SongRow } from "../components/SongRow";
+import { SongTree, countRoots } from "../components/SongTree";
 import { Dropdown } from "../components/Dropdown";
 
 const SORTS = ["Newest First", "Oldest First", "Title A–Z", "Most Played"];
@@ -28,7 +29,7 @@ export function CreatePage() {
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<string[]>([]);
   const [sort, setSort] = useState(SORTS[0]);
-  const [view, setView] = useState("List");
+  const [view, setView] = useState("Tree");
   const [page, setPage] = useState(1);
 
   const workspace = workspaces.find((w) => w.id === activeWorkspaceId);
@@ -75,7 +76,9 @@ export function CreatePage() {
     return list;
   }, [songs, activeWorkspaceId, defaultWorkspaceId, search, filters, sort]);
 
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  // Tree view paginates over roots, so the page count differs from the flat list.
+  const rootCount = useMemo(() => countRoots(rows), [rows]);
+  const pageCount = Math.max(1, Math.ceil((view === "Tree" ? rootCount : rows.length) / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const queueIds = rows.map((s) => s.id);
 
@@ -123,7 +126,7 @@ export function CreatePage() {
           sortOptions={SORTS}
           sort={sort}
           onSort={setSort}
-          viewOptions={["List", "Compact"]}
+          viewOptions={["Tree", "List", "Compact"]}
           view={view}
           onView={setView}
           quickPills={[
@@ -151,9 +154,16 @@ export function CreatePage() {
               <p>Describe a song on the left and press Create.</p>
             </div>
           )}
-          {pageRows.map((s) => (
-            <SongRow key={s.id} song={s} queueIds={queueIds} />
-          ))}
+          {view === "Tree" ? (
+            // Same renderer the Library uses: derived songs nest here too.
+            <SongTree
+              songs={rows}
+              queueIds={queueIds}
+              pageSlice={[(page - 1) * PAGE_SIZE, page * PAGE_SIZE]}
+            />
+          ) : (
+            pageRows.map((s) => <SongRow key={s.id} song={s} queueIds={queueIds} />)
+          )}
         </div>
       </section>
     </div>

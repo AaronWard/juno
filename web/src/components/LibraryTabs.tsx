@@ -9,8 +9,8 @@ export const LIBRARY_TABS = [
   "Lyrics",
   "Styles",
   "Cover Art",
-  "Hooks",
-  "Liked Hooks",
+  "Samples",
+  "Liked Samples",
   "History",
 ] as const;
 

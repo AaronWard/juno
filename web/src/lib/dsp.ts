@@ -122,7 +122,10 @@ export function timeStretch(buf: AudioBuffer, stretch: number): AudioBuffer {
   const overlap = Math.round(grain / 2);
   const hopOut = grain - overlap;
   const hopIn = Math.max(1, Math.round(hopOut / ratio));
-  const seek = Math.round(sr * 0.015); // ±15 ms similarity search window
+  // Search window must stay small relative to hopIn. At ±15 ms against a ~24 ms
+  // hop the search had 62% of a hop of freedom, which let it wander far enough
+  // to audibly re-time sections. Cap at a quarter of the hop.
+  const seek = Math.min(Math.round(sr * 0.006), Math.floor(hopIn / 4));
 
   const outLength = Math.max(1, Math.ceil(buf.length * ratio) + grain);
   const out = blank(channels, outLength, sr);
@@ -152,8 +155,20 @@ export function timeStretch(buf: AudioBuffer, stretch: number): AudioBuffer {
     dst.push(out.getChannelData(c));
   }
 
-  let inPos = 0;
   let outPos = 0;
+  // Hop index. The read position is derived from this on an IDEAL grid rather
+  // than accumulated from the previous chosen offset.
+  //
+  // The first version advanced with `inPos = best + hopIn`, so any systematic
+  // bias in the similarity search compounded over thousands of hops. Real music
+  // biases it forward (transients attract the correlation), so the stretch was
+  // progressively eaten: a 0.81x request came out ~1.03x instead of 1.23x, with
+  // some passages stretched and others untouched. A pure-sine test signal has
+  // almost no such bias, which is exactly why it failed to catch this.
+  //
+  // Deriving inPos from `k * hopIn` bounds the total deviation at ±seek forever.
+  let k = 0;
+  let inPos = 0;
   // The tail we want the next grain to continue from.
   let template: Float32Array | null = null;
 
@@ -191,7 +206,8 @@ export function timeStretch(buf: AudioBuffer, stretch: number): AudioBuffer {
     }
 
     template = mono.slice(best + hopOut, best + hopOut + overlap);
-    inPos = best + hopIn;
+    k += 1;
+    inPos = Math.round(k * hopIn);
     outPos += hopOut;
   }
 
@@ -214,6 +230,16 @@ export function changeSpeedKeepPitch(buf: AudioBuffer, rate: number): AudioBuffe
   // result lands ~1-3% long. Trim to the exact target so "0.8x" really is
   // 1/0.8 of the original and stays in sync with anything cut against it.
   const target = Math.max(1, Math.round(buf.length / r));
+  // Guard rail: the output length is a hard requirement, not a tolerance. If the
+  // stretch ever lands more than 2% off target something is wrong with the hop
+  // arithmetic and it should be visible, not silently shipped as audio.
+  const errPct = Math.abs(stretched.length - target) / target * 100;
+  if (errPct > 2) {
+    console.warn(
+      `[juno] time-stretch off target: got ${(stretched.length / stretched.sampleRate).toFixed(2)}s, ` +
+        `wanted ${(target / stretched.sampleRate).toFixed(2)}s (${errPct.toFixed(1)}% error)`
+    );
+  }
   if (stretched.length <= target) return stretched;
   const out = blank(stretched.numberOfChannels, target, stretched.sampleRate);
   for (let c = 0; c < stretched.numberOfChannels; c++) {

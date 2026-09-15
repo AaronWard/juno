@@ -46,6 +46,8 @@ export interface StatusResponse {
     loadedModel: string | null;
     loadedPreset: string | null;
     loadedLabel: string | null;
+    /** Everything holding VRAM right now, including non-ACE engines. */
+    residents?: { kind: string; label: string }[];
     llmLoaded: boolean;
     loadedLm: string | null;
     busy: { kind: "loading" | "unloading" | "starting"; model?: string; label?: string; since: string } | null;
@@ -131,6 +133,11 @@ export interface GeneratePayload {
  *  audio (Reverse, Crop, Speed, Sample, Mashup…) is saved as a proper,
  *  typed library row rather than a plain upload. */
 export interface UploadMeta {
+  /** Lineage operation for the created song. Falls back to a mapping from
+   *  `type` on the proxy when omitted. */
+  operation?: string;
+  /** Extra parents beyond sourceSongId (mashups have two). */
+  sourceIds?: string[];
   title?: string;
   type?: Song["type"];
   description?: string;
@@ -253,6 +260,15 @@ export const api = {
     json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   /** Re-transcribe from the stored source audio — no re-upload. Optionally
    *  with a different model size or instrument filter. */
+  /** Load / unload MuScriptor without running a transcription. */
+  midiLoad: (modelSize?: string) =>
+    json<{ ok: boolean }>("/api/midi/server/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelSize }),
+    }),
+  midiUnload: () => json<{ ok: boolean }>("/api/midi/server/stop", { method: "POST" }),
+
   midiRetry: (id: string, opts?: { modelSize?: string; instruments?: string[] }) =>
     json<{ ok: boolean; item: MidiItem }>(`/api/midi/${id}/retry`, {
       method: "POST",
@@ -380,6 +396,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+
+  /** Delete a workspace; its songs go to Trash (recoverable), not away. */
+  deleteWorkspace: (id: string) =>
+    json<{ ok: boolean; name: string; trashed: number }>(`/api/library/workspace/${id}`, { method: "DELETE" }),
 
   deleteSong: (id: string) =>
     json<{ ok: boolean }>(`/api/library/song/${id}`, { method: "DELETE" }),

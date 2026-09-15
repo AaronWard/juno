@@ -23,6 +23,7 @@ import { aceClient, AceHealth } from "./aceClient";
 import { config, Preset, PresetId, presetByAceModel } from "./config";
 import { addHistory, loadDb, mutateDb } from "./storage";
 import { normalizeAceStatus, unwrapAudioUrl } from "./tasks";
+import { midiManager } from "./midi";
 import { gpuMemory, programState, supervisorctl } from "./supervisor";
 import { GenerationTask } from "./types";
 
@@ -162,6 +163,26 @@ async function ensureModel(preset: Preset, onStage?: (s: string) => void): Promi
 
   const from = health.loadedModel;
 
+  // MuScriptor is a separate process on its own port, so it is invisible to
+  // ACE-Step's own health check — but it is NOT invisible to the GPU. Large is
+  // ~10.8 GB resident; an XL DiT plus the 4B LM needs ~19.6 GB. On a 32 GB card
+  // that overflows, which is why loading MuScriptor first and then ACE-Step
+  // died with "CUDA out of memory" during LM init, while the reverse order
+  // worked: ACE-Step into an empty card, then MuScriptor into the remainder.
+  //
+  // So before taking the big allocation, hand back MuScriptor's. It restarts on
+  // demand for the next transcription, exactly as it already does after an idle
+  // timeout.
+  if (midiManager.status().reachable) {
+    onStage?.(`Freeing MuScriptor VRAM before loading ${preset.label}…`);
+    console.log(`[juno-proxy] stopping MuScriptor to make room for ${preset.aceModel}`);
+    await midiManager.stopServer(`loading ${preset.label}`).catch((e) => {
+      // Not fatal on its own — the load may still fit — but say so, because if
+      // it then OOMs this is the reason.
+      console.warn("[juno-proxy] could not stop MuScriptor:", e?.message || e);
+    });
+  }
+
   // ACE-Step has no unload endpoint, and POST /v1/init does NOT free the
   // resident DiT before allocating the new one. Loading Quality on top of Fast
   // therefore asked a 32 GB card to hold two ~9 GB XL DiTs plus the 4B LM,
@@ -198,6 +219,10 @@ async function ensureModel(preset: Preset, onStage?: (s: string) => void): Promi
     await refreshHealth();
   }
   // /v1/init can report success while the LM failed; surface it.
+  // A successful load must clear the previous failure, or the UI shows
+  // "Juno XL Fast ready" and "Could not load Juno XL Fast" at the same time.
+  lastError = null;
+
   if (health.loadedModel !== preset.aceModel) {
     throw new Error(`ACE-Step reports ${health.loadedModel || "no model"} loaded after initializing ${preset.label}.`);
   }
@@ -449,6 +474,7 @@ export const modelManager = {
 
   async status() {
     const db = loadDb();
+    const midi = midiManager.status();
     const active = inFlight(db).length;
     const waiting = pendingSubmission(db).length;
     let activity: AceActivity;
@@ -469,6 +495,18 @@ export const modelManager = {
       loadedModel: health.loadedModel || null,
       loadedPreset: loadedPreset?.id || null,
       loadedLabel: loadedPreset?.label || health.loadedModel || null,
+      // Everything currently holding VRAM, so the headline can never say
+      // "No model loaded" while MuScriptor sits in 10 GB of it. The VRAM bar
+      // was already telling the truth; only the label was lying.
+      residents: [
+        ...(health.loadedModel ? [{ kind: "acestep" as const, label: loadedPreset?.label || health.loadedModel }] : []),
+        ...(health.llmInitialized && health.loadedLmModel
+          ? [{ kind: "lm" as const, label: `${health.loadedLmModel} (${config.lmBackend})` }]
+          : []),
+        ...(midi.reachable
+          ? [{ kind: "muscriptor" as const, label: `MuScriptor${midi.modelSize ? ` (${midi.modelSize})` : ""}` }]
+          : []),
+      ],
       llmLoaded: !!health.llmInitialized,
       loadedLm: health.loadedLmModel || null,
       busy: busy ? { ...busy, label: busy.model ? labelOf(busy.model) : undefined } : null,

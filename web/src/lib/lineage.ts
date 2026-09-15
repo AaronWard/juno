@@ -40,7 +40,11 @@ export const OPERATION_LABEL: Record<SongOperation, string> = {
  *  deleted) are promoted to roots rather than silently vanishing — a filtered
  *  Library must never hide a song just because its ancestor didn't match.
  */
-export function buildLineageTree(songs: Song[]): LineageNode[] {
+export function buildLineageTree(
+  songs: Song[],
+  /** Comparator for ROOT ordering — pass the same one the flat list uses. */
+  compare?: (a: Song, b: Song) => number
+): LineageNode[] {
   const byId = new Map(songs.map((s) => [s.id, s]));
   const nodes = new Map<string, LineageNode>(
     songs.map((s) => [s.id, { song: s, children: [], depth: 0, descendantCount: 0 }])
@@ -96,12 +100,17 @@ export function buildLineageTree(songs: Song[]): LineageNode[] {
     assign(node);
   }
 
-  // Newest roots first, matching the flat view; children oldest-first so a
-  // branch reads chronologically as a creative history.
-  const byNewest = (a: LineageNode, b: LineageNode) =>
-    new Date(b.song.createdAt).getTime() - new Date(a.song.createdAt).getTime();
-  const byOldest = (a: LineageNode, b: LineageNode) => -byNewest(a, b);
-  roots.sort(byNewest);
+  // Roots honour the user's sort selection. The first version hard-coded
+  // "newest first" here, which silently discarded the toolbar choice — and
+  // since Tree became the default view, that made the sort control look
+  // completely dead even though the flat list was sorting correctly.
+  //
+  // Children stay oldest-first regardless: a branch is a creative history and
+  // reads correctly in the order things were made. That is a deliberate choice,
+  // and the UI says so rather than leaving it a mystery.
+  const byOldest = (a: LineageNode, b: LineageNode) =>
+    new Date(a.song.createdAt).getTime() - new Date(b.song.createdAt).getTime();
+  if (compare) roots.sort((a, b) => compare(a.song, b.song));
   const sortChildren = (n: LineageNode) => {
     n.children.sort(byOldest);
     n.children.forEach(sortChildren);

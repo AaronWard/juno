@@ -142,6 +142,15 @@ router.post("/models/unload", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/midi/server/start", async (req: Request, res: Response) => {
+  try {
+    await midiManager.startServer(req.body?.modelSize);
+    res.json({ ok: true, midi: midiManager.status() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
 router.post("/midi/server/stop", async (_req: Request, res: Response) => {
   try {
     await midiManager.stopServer("manual");
@@ -709,6 +718,39 @@ router.post("/library/workspace", (req: Request, res: Response) => {
     return w;
   });
   res.json({ ok: true, workspace });
+});
+
+/** Delete a workspace and move its songs to Trash.
+ *
+ *  Songs are trashed, never hard-deleted: a workspace is an organisational
+ *  container, and deleting a folder should not destroy months of audio. They
+ *  keep the normal 14-day Trash window and can be restored individually. */
+router.delete("/library/workspace/:id", (req: Request, res: Response) => {
+  const out = mutateDb((db) => {
+    const idx = db.workspaces.findIndex((w) => w.id === req.params.id);
+    if (idx < 0) return null;
+    const w = db.workspaces[idx];
+    // The first workspace is the implicit default for songs with no
+    // workspaceId, so those have to be caught too or they would be orphaned.
+    const defaultId = db.workspaces[0]?.id;
+    const affected = db.songs.filter(
+      (s) => !s.trashed && ((s.workspaceId ?? defaultId) === w.id)
+    );
+    const ts = now();
+    for (const s of affected) {
+      s.trashed = true;
+      s.trashedAt = ts;
+      s.updatedAt = ts;
+    }
+    db.workspaces.splice(idx, 1);
+    addHistory(db, `Deleted workspace "${w.name}" and moved ${affected.length} song(s) to Trash`);
+    return { name: w.name, trashed: affected.length };
+  });
+  if (!out) {
+    res.status(404).json({ ok: false, error: "Workspace not found" });
+    return;
+  }
+  res.json({ ok: true, ...out });
 });
 
 router.post("/library/playlist", (req: Request, res: Response) => {
