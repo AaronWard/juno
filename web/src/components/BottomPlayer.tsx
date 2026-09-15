@@ -9,6 +9,7 @@
  *  - Queue drawer supports removing songs (see QueueDrawer).
  */
 import React, { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
 import { coverGradient } from "../lib/audio";
@@ -265,7 +266,7 @@ export function BottomPlayer() {
             patchSong(currentSong.id, { liked: !currentSong.liked, disliked: false })
           }
         >
-          {currentSong?.liked ? "♥" : "♡"}
+          <Icon name={currentSong?.liked ? "heart-filled" : "heart"} />
         </Button>
         <Button
           variant="icon"
@@ -274,13 +275,13 @@ export function BottomPlayer() {
           active={currentSong?.disliked}
           onClick={dislike}
         >
-          👎
+          <Icon name="thumb-down" />
         </Button>
         <Button variant="icon" label="Notes" disabled={empty} onClick={() => setNotesOpen(true)}>
-          💬
+          <Icon name="comment" />
         </Button>
         <Button variant="icon" label="Share / export" disabled={empty} onClick={() => setShareOpen(true)}>
-          ↗
+          <Icon name="share" />
         </Button>
         <Dropdown
           triggerClass="btn btn-icon"
@@ -312,7 +313,7 @@ export function BottomPlayer() {
         <Dropdown
           triggerClass="btn btn-icon"
           ariaLabel="Volume"
-          trigger={<>{muted ? "🔇" : "🔊"}</>}
+          trigger={<Icon name={muted ? "volume-muted" : "volume"} />}
         >
           <div style={{ padding: "8px 10px", width: 220 }}>
             <Slider
@@ -329,7 +330,7 @@ export function BottomPlayer() {
           </div>
         </Dropdown>
         <Button variant="icon" label="Track info" disabled={empty} onClick={() => setInfoOpen(true)}>
-          ⓘ
+          <Icon name="info" />
         </Button>
       </div>
 

@@ -142,12 +142,32 @@ router.post("/models/unload", async (req: Request, res: Response) => {
   }
 });
 
+/** Start MuScriptor.
+ *
+ *  Eviction is symmetric: loading an ACE-Step DiT already frees MuScriptor,
+ *  and now loading MuScriptor frees ACE-Step. On a 32 GB card an XL DiT plus
+ *  the 4B LM (~19.6 GB) and MuScriptor large (~10.8 GB) do not both fit, so
+ *  without this the button just said "Loading MuScriptor (large)…" and fell
+ *  back to "not loaded" with the real OOM buried in the log.
+ *
+ *  `freeVram: false` attempts the load anyway, for smaller MuScriptor sizes
+ *  that genuinely do fit alongside ACE-Step.
+ */
 router.post("/midi/server/start", async (req: Request, res: Response) => {
+  const freeVram = req.body?.freeVram !== false;
   try {
+    if (freeVram && (await modelManager.status()).loadedModel) {
+      await modelManager.requestUnload("loading MuScriptor", true);
+    }
     await midiManager.startServer(req.body?.modelSize);
     res.json({ ok: true, midi: midiManager.status() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
+    const msg = e?.message || String(e);
+    // Surface the cause rather than silently reverting to "not loaded".
+    const hint = /out of memory|CUDA|spawn error/i.test(msg)
+      ? " — not enough free VRAM. Unload ACE-Step (or pick a smaller MuScriptor size) and retry."
+      : "";
+    res.status(500).json({ ok: false, error: msg + hint });
   }
 });
 
@@ -963,13 +983,47 @@ router.patch("/library/song/:id", (req: Request, res: Response) => {
   res.json({ ok: true, song: updated });
 });
 
+/** Delete a song forever — including its audio file.
+ *
+ *  The row was being dropped from the DB while the WAV/MP3 stayed on disk, so
+ *  emptying the Trash freed nothing and outputs/library grew forever. Files are
+ *  only removed when they live inside Juno's own output/upload directories and
+ *  no OTHER song still references the same path, so a derived row sharing a
+ *  file can never pull it out from under its sibling.
+ */
 router.delete("/library/song/:id", (req: Request, res: Response) => {
-  mutateDb((db) => {
+  const removed = mutateDb((db) => {
     const song = db.songs.find((s) => s.id === req.params.id);
+    if (!song) return null;
     db.songs = db.songs.filter((s) => s.id !== req.params.id);
-    if (song) addHistory(db, `Deleted forever "${song.title}"`);
+    addHistory(db, `Deleted forever "${song.title}"`);
+
+    const files: string[] = [];
+    const stillUsed = (p: string) =>
+      db.songs.some((s) => s.localAudioPath === p) ||
+      db.midi.some((m) => m.sourceAudioPath === p);
+
+    for (const p of [song.localAudioPath].filter(Boolean) as string[]) {
+      // Only ever unlink inside our own directories: a song can point at a
+      // user-supplied path, and deleting a library row must not delete
+      // somebody's original file.
+      const owned =
+        p.startsWith(config.outputDir) || p.startsWith(config.uploadDir) || p.startsWith(config.midiSourceDir);
+      if (!owned || stillUsed(p)) continue;
+      try {
+        fs.rmSync(p, { force: true });
+        files.push(path.basename(p));
+      } catch (e: any) {
+        console.warn(`[juno-proxy] could not delete ${p}:`, e?.message || e);
+      }
+    }
+    return { title: song.title, files };
   });
-  res.json({ ok: true });
+  if (!removed) {
+    res.status(404).json({ ok: false, error: "Song not found" });
+    return;
+  }
+  res.json({ ok: true, ...removed });
 });
 
 /** Export as a real download.

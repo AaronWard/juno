@@ -12,9 +12,14 @@ import { api } from "../lib/api";
 
 export function WorkspaceDeleteModal({
   workspaceId,
+  songCount,
   onClose,
 }: {
   workspaceId: string;
+  /** Count as displayed on the workspace card. Passed in rather than
+   *  recomputed here — the modal previously derived its own number and could
+   *  report "no songs" for a workspace the card showed as having four. */
+  songCount: number;
   onClose: () => void;
 }) {
   const { workspaces, songs, notify, removeWorkspace, trashSong, activeWorkspaceId, setActiveWorkspaceId } = useJuno();
@@ -22,6 +27,7 @@ export function WorkspaceDeleteModal({
   const ws = workspaces.find((w) => w.id === workspaceId);
   const defaultId = workspaces[0]?.id;
   const affected = songs.filter((s) => !s.trashed && (s.workspaceId ?? defaultId) === workspaceId);
+  const count = Math.max(songCount, affected.length);
 
   if (!ws) return null;
 
@@ -65,11 +71,10 @@ export function WorkspaceDeleteModal({
         </>
       }
     >
-      {affected.length > 0 ? (
+      {count > 0 ? (
         <>
           <p>
-            <strong>{affected.length}</strong> song{affected.length === 1 ? "" : "s"} in this workspace will be moved
-            to Trash.
+            <strong>{count}</strong> song{count === 1 ? "" : "s"} in this workspace will be moved to Trash.
           </p>
           <p className="inline-hint">
             Nothing is destroyed — they stay in Trash for 14 days and can be restored individually. Anything already

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Icon } from "./Icon";
 import { Song } from "../data/mockSongs";
 import { useJuno } from "../App";
 import { fmtDuration } from "../lib/format";
@@ -51,7 +52,7 @@ export function SongRow({
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }) {
-  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, deleteForever, retrySong, midiItems, navigate } =
+  const { currentSong, isPlaying, playSong, togglePlay, patchSong, trashSong, deleteForever, retrySong, midiItems, navigate, setInfoSongId } =
     useJuno();
   // Hold Shift to reveal one-click delete on every row.
   const quickDelete = useQuickDelete();
@@ -172,7 +173,7 @@ export function SongRow({
             active={song.liked}
             onClick={() => patchSong(song.id, { liked: !song.liked, disliked: false })}
           >
-            {song.liked ? "♥" : "♡"}
+            <Icon name={song.liked ? "heart-filled" : "heart"} />
           </Button>
           <Button
             variant="icon"
@@ -180,14 +181,15 @@ export function SongRow({
             active={song.disliked}
             onClick={dislike}
           >
-            👎
+            <Icon name={song.disliked ? "thumb-down-filled" : "thumb-down"} />
           </Button>
           <Button
             variant="icon"
             label="Notes"
             onClick={() => setNotesOpen(true)}
           >
-            💬{noteCount > 0 ? ` ${noteCount}` : ""}
+            <Icon name="comment" />
+            {noteCount > 0 && <span className="icon-count">{noteCount}</span>}
           </Button>
           <Button
             variant="icon"
@@ -195,7 +197,18 @@ export function SongRow({
             active={song.public}
             onClick={() => patchSong(song.id, { public: !song.public })}
           >
-            ↗
+            <Icon name="share" />
+          </Button>
+          <Button
+            variant="icon"
+            label={`Details for ${song.title}`}
+            title="Song details"
+            onClick={(e) => {
+              e.stopPropagation();
+              setInfoSongId(song.id);
+            }}
+          >
+            <Icon name="info" />
           </Button>
           {failed && (
             <Button
@@ -237,7 +250,7 @@ export function SongRow({
               else trashSong(song.id);
             }}
           >
-            {song.trashed ? "🗑" : "🗄"}
+            <Icon name={song.trashed ? "trash" : "archive"} />
           </Button>
         )}
         <SongOverflowMenu song={song} />

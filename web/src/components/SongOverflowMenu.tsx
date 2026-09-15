@@ -11,6 +11,7 @@
  *  Metadata only:    Reuse Prompt, Use as Inspiration (form prefill)
  */
 import React, { useEffect, useRef, useState } from "react";
+import { Icon } from "./Icon";
 import { useJuno } from "../App";
 import { Song } from "../data/mockSongs";
 import { Dropdown } from "./Dropdown";
@@ -413,7 +414,7 @@ export function SongOverflowMenu({ song }: { song: Song }) {
         <div className="menu-divider" />
         {!song.trashed && (
           <button className="menu-item" onClick={() => trashSong(song.id)}>
-            🗑 Move to Trash
+            <><Icon name="archive" /> Move to Trash</>
           </button>
         )}
         <button className="menu-item" onClick={() => open("delete")}>

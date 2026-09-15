@@ -4,6 +4,7 @@
  *  Deleting tracks lives in each row's ⋯ menu (Move to Trash / Delete
  *  Forever) and in /trash. */
 import React, { useMemo, useState } from "react";
+import { Icon } from "../components/Icon";
 import { useJuno } from "../App";
 import { LibraryTabs, LibraryTab } from "../components/LibraryTabs";
 import { Toolbar } from "../components/Toolbar";
@@ -169,7 +170,7 @@ export function LibraryPage() {
         <div style={{ display: "flex", gap: 8 }}>
           <Button onClick={() => setUploadOpen(true)}>＋ Audio</Button>
           <Button variant="ghost" onClick={() => navigate("/trash")}>
-            🗑 Trash
+            <><Icon name="trash" /> Trash</>
           </Button>
         </div>
       </div>
@@ -279,6 +280,11 @@ export function LibraryPage() {
       {deleteWorkspace && (
         <WorkspaceDeleteModal
           workspaceId={deleteWorkspace}
+          songCount={
+            songs.filter(
+              (s) => (s.workspaceId ?? defaultWorkspaceId) === deleteWorkspace && !s.trashed
+            ).length
+          }
           onClose={() => setDeleteWorkspace(null)}
         />
       )}
@@ -412,7 +418,7 @@ export function LibraryPage() {
                         active={liked}
                         onClick={() => setStyleLiked(p.id, !liked)}
                       >
-                        {liked ? "♥" : "♡"}
+                        <Icon name={liked ? "heart-filled" : "heart"} />
                       </Button>
                       <Button
                         onClick={() => {
@@ -486,7 +492,7 @@ export function LibraryPage() {
                       active={!!likedHooks[h.id]}
                       onClick={() => patchSong(h.id, { liked: !likedHooks[h.id] })}
                     >
-                      {likedHooks[h.id] ? "♥" : "♡"}
+                      <Icon name={likedHooks[h.id] ? "heart-filled" : "heart"} />
                     </Button>
                   </div>
                 </div>

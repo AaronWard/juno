@@ -16,6 +16,7 @@ import React, {
 } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { BottomPlayer } from "./components/BottomPlayer";
+import { SongInfoPanel } from "./components/SongInfoPanel";
 import { CreatePage } from "./pages/CreatePage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { StudioPage } from "./pages/StudioPage";
@@ -98,6 +99,9 @@ interface JunoStore {
   trashSong: (id: string) => void;
   /** Drop a workspace from local state after the server deleted it. */
   removeWorkspace: (id: string) => void;
+  /** Song whose details are shown in the right-hand panel, or null. */
+  infoSongId: string | null;
+  setInfoSongId: (id: string | null) => void;
   restoreSong: (id: string) => void;
   deleteForever: (id: string) => void;
   emptyTrash: () => void;
@@ -410,6 +414,8 @@ export default function App() {
       ...prev,
     ]);
   }, []);
+
+  const [infoSongId, setInfoSongId] = useState<string | null>(null);
 
   const removeWorkspace = useCallback(
     (id: string) => setWorkspaces((ws) => ws.filter((w) => w.id !== id)),
@@ -807,6 +813,8 @@ export default function App() {
     addSong,
     trashSong,
     removeWorkspace,
+    infoSongId,
+    setInfoSongId,
     restoreSong,
     deleteForever,
     emptyTrash,
@@ -876,6 +884,7 @@ export default function App() {
         <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed(!collapsed)} />
         <main className="app-main">{page}</main>
         <BottomPlayer />
+      <SongInfoPanel song={songs.find((s) => s.id === infoSongId) || null} onClose={() => setInfoSongId(null)} />
         <div className="toast-stack" role="status" aria-live="polite">
           {toasts.map((t) => (
             <div key={t.id} className={`toast toast-${t.tone}`}>

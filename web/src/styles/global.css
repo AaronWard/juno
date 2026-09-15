@@ -1940,80 +1940,252 @@ button.chip {
 /* Library lineage tree                                                */
 /* ------------------------------------------------------------------ */
 
-/* Derived rows are indented siblings, not nested containers, so the tree and
-   flat views share one layout. First version used 22px steps with an 18px
-   toggle, which was invisible against a ~64px row — nesting has to be readable
-   at a glance, so: wider steps, a real elbow connector, a bigger toggle, and
-   cover art that shrinks with depth so hierarchy is carried by more than
-   whitespace. */
-.song-row.derived {
-  position: relative;
+/* ------------------------------------------------------------------ */
+/* Library lineage tree                                                */
+/* ------------------------------------------------------------------ */
+
+/* Structural nesting: each level is a real container with a guide rail, so a
+   child can never render left of its parent. The previous version indented
+   sibling rows with padding, which made depth a hint rather than a fact. */
+.lineage-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.song-row.derived .lineage-branch {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 18px;
-  margin-left: -26px;
-  pointer-events: none;
+.lineage-node {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-/* vertical run of the elbow */
-.song-row.derived .lineage-branch::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 50%;
-  width: 2px;
-  background: var(--color-border);
-  border-radius: 2px;
+.lineage-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
 }
-/* horizontal arm into the row */
-.song-row.derived .lineage-branch::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 14px;
-  height: 2px;
-  background: var(--color-border);
-  border-bottom-left-radius: 4px;
-}
-/* Derived rows get progressively smaller artwork. */
-.song-row.derived .song-art,
-.song-row.derived .song-thumb,
-.song-row.derived img {
-  width: 44px;
-  height: 44px;
-}
-.song-row.derived .badge {
-  opacity: 1;
-}
-.lineage-toggle {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+/* Fixed-width chevron column keeps rows aligned whether or not a song has
+   derivatives. */
+.lineage-gutter {
+  flex: 0 0 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 4px;
+}
+.lineage-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.lineage-toggle {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
-  border: 1px solid var(--color-border-subtle);
+  border: 0;
   border-radius: 6px;
-  background: var(--color-bg-pill);
+  background: transparent;
   color: var(--color-text-secondary);
-  font-size: 13px;
-  line-height: 1;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .lineage-toggle:hover {
-  background: var(--color-bg-elevated, var(--color-bg-sidebar));
-  border-color: var(--color-accent);
+  background: var(--color-bg-pill);
   color: var(--color-text-primary);
 }
-.lineage-toggle.collapsed {
-  border-color: var(--color-accent);
+
+/* The rail. Children sit inside their parent's container and the rail runs
+   down the left of the group, the way a file tree reads. */
+.lineage-children {
+  position: relative;
+  margin-left: 13px;
+  padding-left: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lineage-children::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -4px;
+  bottom: 16px;
+  width: 1px;
+  background: var(--color-border);
+}
+/* Elbow from the rail into each child row. */
+.lineage-children > .lineage-node > .lineage-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 18px;
+  height: 1px;
+  background: var(--color-border);
+  transform: translateY(26px);
+}
+.lineage-children > .lineage-node > .lineage-row {
+  position: relative;
+}
+
+.icon-count {
+  font-size: 11px;
+  margin-left: 3px;
+  color: var(--color-text-secondary);
+}
+
+/* ------------------------------------------------------------------ */
+/* Song details panel (right slide-out)                                */
+/* ------------------------------------------------------------------ */
+.info-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s;
+  z-index: 70;
+}
+.info-scrim.open {
+  opacity: 1;
+  visibility: visible;
+}
+.info-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated, var(--color-bg-sidebar));
+  border-left: 1px solid var(--color-border);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+  transform: translateX(100%);
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: 71;
+}
+.info-panel.open {
+  transform: translateX(0);
+}
+.info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.info-header h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.info-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.info-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.info-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-secondary);
+}
+.info-value {
+  font-size: 13px;
   color: var(--color-text-primary);
+}
+.info-prose {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.info-pre {
+  font-family: inherit;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.info-lineage,
+.info-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-lineage li.current .info-link {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.info-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.info-link:hover {
+  text-decoration: underline;
+}
+.info-footer {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace / playlist cards — were cramped and unreadable            */
+/* ------------------------------------------------------------------ */
+.asset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  min-width: 0;
+}
+.asset-card .asset-thumb {
+  height: 96px;
+  border-radius: 10px;
+}
+.asset-card strong {
+  font-size: 14px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The meta line ran straight into the title with no break. */
+.asset-card .inline-hint {
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.asset-card .btn {
+  width: 100%;
+  justify-content: center;
+}
+.asset-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
 }

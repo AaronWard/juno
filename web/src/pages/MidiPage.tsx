@@ -93,6 +93,7 @@ function MidiEngineLine() {
   const { status, notify, refreshHealth } = useJuno();
   const [busy, setBusy] = useState(false);
   const m = status?.midi;
+  const aceLoaded = !!status?.ace?.loadedLabel;
   if (!m) return null;
 
   const label: Record<string, string> = {
@@ -127,8 +128,17 @@ function MidiEngineLine() {
         <span className="inline-hint">· frees its VRAM at {new Date(m.stopAt).toLocaleTimeString()}</span>
       )}
       {(m.activity === "stopped" || m.activity === "error") && (
-        <Button variant="ghost" loading={busy} onClick={() => run(() => api.midiLoad())}>
-          Load MuScriptor
+        <Button
+          variant="ghost"
+          loading={busy}
+          title={
+            aceLoaded
+              ? "Loads MuScriptor. ACE-Step will be unloaded first — they don't both fit in 32 GB."
+              : "Loads MuScriptor into VRAM"
+          }
+          onClick={() => run(() => api.midiLoad())}
+        >
+          {aceLoaded ? "Load MuScriptor (frees ACE-Step)" : "Load MuScriptor"}
         </Button>
       )}
       {m.activity === "ready" && (
@@ -720,65 +730,7 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
           </>
         )}
         <DeleteModal open={confirmDelete} title={item.title} onCancel={() => setConfirmDelete(false)} onConfirm={doDelete} />
-      <Modal
-        title="Render MIDI to audio"
-        open={renderOpen}
-        onClose={() => (busy === "render" ? undefined : setRenderOpen(false))}
-        footer={
-          <>
-            <Button variant="ghost" disabled={busy === "render"} onClick={() => setRenderOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" loading={busy === "render"} onClick={() => renderWav(renderWorkspace || undefined)}>
-              Render {notes.length} notes
-            </Button>
-          </>
-        }
-      >
-        <p>
-          Plays the transcription through Juno's built-in synth and saves the result as a real audio track in your
-          Library and Create list. Muted and soloed tracks are respected.
-        </p>
-        <p className="inline-hint">
-          This is for checking and sharing a transcription, not for production — export the .mid to a DAW for that.
-        </p>
-        <label className="field">
-          <span className="field-label">Save to workspace</span>
-          <select className="text-input" value={renderWorkspace} onChange={(e) => setRenderWorkspace(e.target.value)}>
-            <option value="">Same as the source song</option>
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {busy === "render" && (
-          <p className="inline-hint" role="status" style={{ marginTop: 10 }}>
-            <span className="spinner" aria-hidden="true" /> {renderStage || "Working…"} — dense transcriptions can take
-            a minute.
-          </p>
-        )}
-      </Modal>
 
-      <Modal
-        title="Re-transcribe this audio"
-        open={retranscribeOpen}
-        onClose={() => setRetranscribeOpen(false)}
-        footer={<Button variant="ghost" onClick={() => setRetranscribeOpen(false)}>Cancel</Button>}
-      >
-        <p>
-          Runs MuScriptor again over the audio Juno already stored for this item — no re-upload needed. Pick a
-          different model size if you want a more (or less) detailed transcription.
-        </p>
-        <p className="inline-hint">
-          The new transcription replaces this one. Any edits you saved are kept as a separate file and are not
-          overwritten.
-        </p>
-        <div style={{ marginTop: 12 }}>
-          <RetranscribeControls item={item} label="Re-transcribe" onDone={() => setRetranscribeOpen(false)} />
-        </div>
-      </Modal>
       </div>
     );
   }
@@ -1019,6 +971,65 @@ function MidiWorkspace({ item }: { item: MidiItem }) {
         <p className="inline-hint">New notes go on the active track (click a track name). The synth is a light preview — download the .mid for your DAW.</p>
       </Modal>
       <DeleteModal open={confirmDelete} title={item.title} onCancel={() => setConfirmDelete(false)} onConfirm={doDelete} />
+      <Modal
+        title="Render MIDI to audio"
+        open={renderOpen}
+        onClose={() => (busy === "render" ? undefined : setRenderOpen(false))}
+        footer={
+          <>
+            <Button variant="ghost" disabled={busy === "render"} onClick={() => setRenderOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" loading={busy === "render"} onClick={() => renderWav(renderWorkspace || undefined)}>
+              Render {notes.length} notes
+            </Button>
+          </>
+        }
+      >
+        <p>
+          Plays the transcription through Juno's built-in synth and saves the result as a real audio track in your
+          Library and Create list. Muted and soloed tracks are respected.
+        </p>
+        <p className="inline-hint">
+          This is for checking and sharing a transcription, not for production — export the .mid to a DAW for that.
+        </p>
+        <label className="field">
+          <span className="field-label">Save to workspace</span>
+          <select className="text-input" value={renderWorkspace} onChange={(e) => setRenderWorkspace(e.target.value)}>
+            <option value="">Same as the source song</option>
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {busy === "render" && (
+          <p className="inline-hint" role="status" style={{ marginTop: 10 }}>
+            <span className="spinner" aria-hidden="true" /> {renderStage || "Working…"} — dense transcriptions can take
+            a minute.
+          </p>
+        )}
+      </Modal>
+
+      <Modal
+        title="Re-transcribe this audio"
+        open={retranscribeOpen}
+        onClose={() => setRetranscribeOpen(false)}
+        footer={<Button variant="ghost" onClick={() => setRetranscribeOpen(false)}>Cancel</Button>}
+      >
+        <p>
+          Runs MuScriptor again over the audio Juno already stored for this item — no re-upload needed. Pick a
+          different model size if you want a more (or less) detailed transcription.
+        </p>
+        <p className="inline-hint">
+          The new transcription replaces this one. Any edits you saved are kept as a separate file and are not
+          overwritten.
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <RetranscribeControls item={item} label="Re-transcribe" onDone={() => setRetranscribeOpen(false)} />
+        </div>
+      </Modal>
     </div>
   );
 }

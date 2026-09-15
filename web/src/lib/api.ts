@@ -261,11 +261,11 @@ export const api = {
   /** Re-transcribe from the stored source audio — no re-upload. Optionally
    *  with a different model size or instrument filter. */
   /** Load / unload MuScriptor without running a transcription. */
-  midiLoad: (modelSize?: string) =>
+  midiLoad: (modelSize?: string, freeVram = true) =>
     json<{ ok: boolean }>("/api/midi/server/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ modelSize }),
+      body: JSON.stringify({ modelSize, freeVram }),
     }),
   midiUnload: () => json<{ ok: boolean }>("/api/midi/server/stop", { method: "POST" }),
 
